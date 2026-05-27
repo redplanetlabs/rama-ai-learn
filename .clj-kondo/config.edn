@@ -1,0 +1,1 @@
+{:lint-as {rama-challenges.harness/with-module clojure.core/with-open}}

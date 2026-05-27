@@ -1,0 +1,22 @@
+{
+  "name": "rama-ai-learn",
+  "owner": {
+    "name": "Red Planet Labs",
+    "url": "https://ghe.internal.redplanetlabs.com/rpl/rama-ai-learn"
+  },
+  "metadata": {
+    "description": "Marketplace for Rama development skills",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "rama-skill",
+      "description": "Rama distributed programming skill for Claude Code",
+      "version": "1.0.0",
+      "source": "./plugins/rama-skill",
+      "category": "development",
+      "tags": ["rama", "clojure", "distributed-systems"],
+      "strict": true
+    }
+  ]
+}

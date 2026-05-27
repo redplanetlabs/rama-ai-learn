@@ -1,0 +1,7 @@
+{:mvn/repos {"nexus-releases" {:url "https://nexus.redplanetlabs.com/repository/maven-public-releases"}}
+ :deps {rama-challenges/rama-deps {:local/root "../rama-deps"}}
+ :paths ["src" "test"]
+ :aliases {:test {:extra-deps {io.github.cognitect-labs/test-runner
+                               {:git/tag "v0.5.1" :git/sha "dfb30dd"}}
+                  :exec-fn cognitect.test-runner.api/test
+                  :exec-args {:dirs ["test"]}}}}

@@ -1,0 +1,6 @@
+{:mvn/repos {"nexus-releases" {:url "https://nexus.redplanetlabs.com/repository/maven-public-releases"}}
+ :deps {org.clojure/clojure {:mvn/version "1.12.4"}
+        rama-challenges/rama-deps {:local/root "../../../../lib/rama-deps"}}
+ :paths ["src"]
+ :aliases {:build {:deps {io.github.clojure/tools.build {:git/tag "v0.10.5" :git/sha "2a21b7a"}}
+                   :ns-default build}}}

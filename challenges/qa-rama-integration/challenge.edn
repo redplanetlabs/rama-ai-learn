@@ -1,0 +1,6 @@
+{:type :qa
+ :corpus ["plugins/rama-skill/skills/rama/SKILL.md"
+          "plugins/rama-skill/skills/rama/references/external-depots.md"
+          "plugins/rama-skill/skills/rama/references/patterns.md"
+          "plugins/rama-skill/skills/rama/references/task-globals.md"]
+ :pass-threshold 0.7}

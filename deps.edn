@@ -1,0 +1,5 @@
+{:mvn/repos {"nexus-releases" {:url "https://nexus.redplanetlabs.com/repository/maven-public-releases"}}
+ :deps {rama-challenges/rama-deps {:local/root "lib/rama-deps"}}
+ :aliases {:nrepl {:extra-deps {nrepl/nrepl {:mvn/version "1.3.0"}}
+                   :main-opts ["-m" "nrepl.cmdline"]}
+           :error-catalog {:extra-deps {rama-challenges/error-catalog {:local/root "lib/error-catalog"}}}}}

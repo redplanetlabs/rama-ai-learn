@@ -1,0 +1,9 @@
+{
+  "name": "rama-skill",
+  "description": "Rama distributed programming skill for Claude Code — covers depots, PStates, topologies, and dataflow patterns",
+  "version": "1.0.0",
+  "author": {
+    "name": "Red Planet Labs"
+  },
+  "keywords": ["rama", "clojure", "distributed-systems"]
+}

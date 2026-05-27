@@ -1,0 +1,104 @@
+{:tasks
+ {run-challenges
+  {:doc "Run Rama coding challenges against an AI agent"
+   :task (do (load-file "scripts/run_challenges.bb") ((resolve '-main) *command-line-args*))}
+   
+  verify-lcb-private-tests
+  {:doc "Verify LCB challenges have migrated private-test alias/files/readme command"
+   :task (do (load-file "scripts/verify_lcb_private_tests.bb") ((resolve '-main) *command-line-args*))}
+
+  lcb-fetch
+  {:doc "Fetch and cache LiveCodeBench problems from HuggingFace"
+   :task (do (load-file "scripts/lcb_fetch.bb") ((resolve '-main) *command-line-args*))}
+
+  lcb-list
+  {:doc "List cached LiveCodeBench problems with optional filters"
+   :task (do (load-file "scripts/lcb_fetch.bb")
+             (load-file "scripts/lcb_list.bb")
+             ((resolve '-main) *command-line-args*))}
+
+  lcb-private-tests
+  {:doc "Print decoded private test cases for a cached LiveCodeBench problem"
+   :task (do (load-file "scripts/lcb_fetch.bb")
+             (load-file "scripts/lcb_private_tests.bb")
+             ((resolve '-main) *command-line-args*))}
+
+  lcb-port
+  {:doc "Scaffold a Rama challenge from a LiveCodeBench problem"
+   :task (do (load-file "scripts/lcb_fetch.bb")
+             (load-file "scripts/lcb_port.bb")
+             ((resolve '-main) *command-line-args*))}
+
+  lcb-migrate-private-tests
+  {:doc "Migrate existing LCB challenges to add private test namespaces and alias"
+   :task (do (load-file "scripts/lcb_fetch.bb")
+             (load-file "scripts/lcb_port.bb")
+             (load-file "scripts/lcb_migrate_private_tests.bb")
+             ((resolve '-main) *command-line-args*))}
+
+  format-transcript
+  {:doc "Format a Claude Code JSONL transcript for readable display"
+   :task (do (load-file "scripts/format_transcript.bb") ((resolve '-main) *command-line-args*))}
+
+  encrypt-challenges
+  {:doc "Encrypt test-resources and test-private files (CHALLENGE_KEY env var required)"
+   :task (do (def challenge-crypt-mode :encrypt)
+             (load-file "scripts/encrypt_challenges.bb")
+             ((resolve '-main) *command-line-args*))}
+
+  decrypt-challenges
+  {:doc "Decrypt test-resources and test-private files (CHALLENGE_KEY env var required)"
+   :task (do (def challenge-crypt-mode :decrypt)
+             (load-file "scripts/encrypt_challenges.bb")
+             ((resolve '-main) *command-line-args*))}
+
+  error-catalog
+  {:doc "Run error-catalog tests to verify Rama troubleshooting signals"
+   :task (shell {:dir "lib/error-catalog"} "clojure" "-X:test")}
+
+  error-diagnostics
+  {:doc "Report line-info quality for each cataloged Rama error"
+   :task (shell {:dir "lib/error-catalog"} "clojure" "-M" "-m" "error-catalog.diagnostics")}
+
+  error-traces
+  {:doc "Dump full exception traces for each cataloged Rama error"
+   :task (shell {:dir "lib/error-catalog"} "clojure" "-M" "-m" "error-catalog.diagnostics" "--traces")}
+
+  publish-skill
+  {:doc "Copy skill to rama-skills repo and create a PR"
+   :task (do (load-file "scripts/publish_skill.bb"))}
+
+  run-qa
+  {:doc "Run Q&A challenges against an AI agent"
+   :task (do (load-file "scripts/run_qa.bb") ((resolve '-main) *command-line-args*))}
+
+  qa-extract-corpus
+  {:doc "Extract claims from corpus for a Q&A challenge (run once, verify, commit)"
+   :task (do (def ^:dynamic *extract-mode* :corpus)
+             (load-file "scripts/qa_extract.bb")
+             ((resolve '-main) *command-line-args*))}
+
+  qa-extract
+  {:doc "Extract claims from a Q&A challenge answer (per-run)"
+   :task (do (def ^:dynamic *extract-mode* :answer)
+             (load-file "scripts/qa_extract.bb")
+             ((resolve '-main) *command-line-args*))}
+
+  qa-score
+  {:doc "Score answer claims against corpus claims for a Q&A challenge"
+   :task (do (load-file "scripts/qa_score.bb") ((resolve '-main) *command-line-args*))}
+
+  qa-report
+  {:doc "Show Q&A scoring report with mismatch details"
+   :task (do (load-file "scripts/qa_report.bb") ((resolve '-main) *command-line-args*))}
+
+  clean-implementations
+  {:doc "Remove all module implementations under implementations/"
+   :requires ([babashka.fs :as fs])
+   :task (do
+           (doseq [dir (fs/list-dir "implementations")]
+             (let [src (fs/file dir "src")]
+               (when (fs/exists? src)
+                 (fs/delete-tree src)
+                 (println "Removed" (str src)))))
+           (println "Done."))}}}

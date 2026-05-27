@@ -1,0 +1,4 @@
+{:type :qa
+ :corpus ["plugins/rama-skill/skills/rama/references/depot-reference.md"
+          "plugins/rama-skill/skills/rama/references/depot-design.md"]
+ :pass-threshold 0.7}

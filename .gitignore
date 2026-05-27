@@ -1,0 +1,25 @@
+# Reflect skill - declined observations
+OBSERVATIONS.md
+/implementations
+/reports
+target/
+/challenges/*/target/
+implementations/**/.clj-kondo/
+challenges/**/.clj-kondo/
+lib/**/.clj-kondo/
+.clj-kondo/cache/
+.clj-kondo/imports/
+!.lsp/
+.lsp/.cache/
+/data/lcb_cache.edn
+/data/
+.mise.toml
+*.enc
+/.cpcache
+.cpcache
+.nrepl-port
+latest-transcript.jsonl
+latest-transcripts
+NOTES
+/.clj-kondo/.cache/
+/logs/

@@ -1,0 +1,25 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 scripts/analyze-latest-transcript.py *)",
+      "Bash(bash scripts/docker-copy-transcript.sh)"
+    ],
+    "deny": [
+      "Skill(rama-skills:rama-clojure-dataflow)",
+      "Skill(rama-skills:rama-clojure-path)"
+    ]
+  },
+  "enabledPlugins": {
+    "skill-creator@claude-plugins-official": true,
+    "clojure-lsp@clojure-lsp-plugin": true
+  },
+  "extraKnownMarketplaces": {
+    "clojure-lsp-plugin": {
+      "source": {
+        "source": "github",
+        "repo": "stefan-sev/clojure-lsp-plugin"
+      }
+    }
+  },
+  "autoMemoryEnabled": false
+}

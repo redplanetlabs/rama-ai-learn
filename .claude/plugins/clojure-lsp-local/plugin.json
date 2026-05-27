@@ -1,0 +1,14 @@
+{
+  "name": "clojure-lsp-local",
+  "lspServers": {
+    "clojure": {
+      "command": "clojure-lsp",
+      "extensionToLanguage": {
+        ".clj": "clojure",
+        ".cljs": "clojure",
+        ".cljc": "clojure",
+        ".edn": "clojure"
+      }
+    }
+  }
+}

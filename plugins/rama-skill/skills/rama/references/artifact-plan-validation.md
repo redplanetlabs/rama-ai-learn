@@ -1,0 +1,66 @@
+# Plan Validation
+
+<!-- Phase 1 Step 6. Fill in after PLAN.md is complete. After all items pass, write the file skeleton (Step 7), then implement topologies (Phase 2), then foreign client (Phase 3), then fill in IMPLEMENTATION_VALIDATION.md (Phase 4). -->
+
+Read `PLAN.md` first, then fill in each item below. Extract the relevant data from the plan and state pass or fail with evidence. If any item fails, fix `PLAN.md` and re-validate.
+
+## Query topology: <name>
+- Input examples present: <yes/no>
+- Example 1: N=<total reads>, M=<meaningful reads>. N == M? <yes/no>
+- Example 2: N=<total reads>, M=<meaningful reads>. N == M? <yes/no>
+- If any N > M: FAIL — query issues wasted reads. Fix the plan.
+- M values across examples: <list>. All same? <yes/no>
+- If M differs: must be marked variable with dynamic approach. Is it? <yes/no>
+
+## PState schemas
+- Any Object type? <yes/no — if yes, FAIL>
+- Uniform record-like values (all instances have same fields) use fixed-keys-schema? <yes/no – if no, FAIL>
+- If different instances at the same PState position have different fields, the schema MUST use definterface + defrecord. No exceptions. IPersistentMap, Object, fixed-keys-schema with optional/nil fields, and "justified deviation" are all FAIL. <yes/no – if no, FAIL>
+- Inner collections that can exceed 100 elements subindexed? A collection needs subindexing if ANY instance can grow to have more than 100 elements (e.g., a popular entity). For each non-subindexed inner collection, name the specific code or protocol rule that enforces the size limit. If no enforcement mechanism exists, it is not bounded — subindex it. "Bounded by domain dynamics" or "typically small" without an enforcement mechanism does not count. <yes/no - if no, FAIL>
+
+## Topologies
+- Microbatch unless justified? <yes/no>
+- For each write operation that must be visible in single-digit milliseconds: is it handled by a stream topology? Microbatch has at least 300ms latency and cannot meet single-digit millisecond visibility requirements. <list each low-latency write and its topology — if any uses microbatch, FAIL>
+
+## Production readiness
+- Does the plan work correctly with multiple concurrent clients? <yes/no — if no, FAIL>
+- Does the plan work correctly after a client process restarts? <yes/no — if no, FAIL>
+- Does the plan work correctly if a worker process restarts at any point during a topology execution? <yes/no — if no, FAIL>
+- Does the plan work at large scale (millions of entities, unbounded growth over time)? Are all collections that aren't enforced by the application to always be less than 100 elements subindexed? <yes/no — if no, FAIL>
+- For each stream topology: list every non-idempotent write (appending to lists, incrementing counters, etc.). For each one, state its resolution — one of:
+    - "Moved to microbatch topology: <topology-name>"
+    - "Made idempotent by: <specific mechanism>"
+    - "Deduplicated by: <specific mechanism>"
+  If a non-idempotent write has no resolution, FAIL.
+- For each stream topology that writes to multiple partitions: can a partial failure + retry leave any writes permanently unexecuted? <trace through failure at each partition hop — if yes, FAIL>
+
+## Cross-topology correctness
+- If data flows between topologies via internal depots: can the sending topology produce duplicate records (e.g., from stream retry)? If so, how does the receiving topology handle duplicates? <list each internal depot flow and dedup mechanism>
+
+## Stream topology correctness
+- For each `depot-partition-append!` in a stream topology: is there a `(|direct (ops/current-task-id))` immediately before it to force a commit boundary? If no, FAIL. Do NOT reason about whether the receiving topology "will read the data later" — ALWAYS add the commit boundary. See `references/stream.md` "When PState writes commit."
+
+## Spec coverage — trace every operation and constraint
+
+Enumerate every operation in the protocol/spec AND every constraint, prohibition, invariant, and edge case from the spec and `IMPLICIT_SPEC.md`. For each one, fill in a block below. Do NOT collapse multiple items into one block. Do NOT replace any block with a single-bullet "covered" claim — that bypasses the check.
+
+For each operation and each constraint:
+
+### <operation name or constraint label>
+- **Source** (verbatim quote from spec / IMPLICIT_SPEC.md): "..."
+- **Trace through the plan**: walk the plan's mechanism end-to-end on a concrete scenario. Use real numbers (entity counts, sizes, timings) — not "a user does X." Show what the plan produces at each step.
+- **Fault-tolerance check** — for each of these, state what happens and whether the constraint still holds:
+  - In-memory state on the affected task is cleared (worker restart): what is the state of this operation/constraint immediately after, and how does the plan recover it?
+  - A topology is retried: does re-executing the event produce the same result, or does it double-count / duplicate / corrupt?
+  - A multi-partition write fails partway: can the system end up in an inconsistent state where some partitions reflect the write and others don't?
+- **Race-condition check** — for each of these, state whether the plan handles it:
+  - Two concurrent clients writing the same entity at the same time
+  - Events arriving out of order at a partition due to partitioner hops
+- **Flaws found**: list every way the trace, fault-tolerance, or race analysis shows the plan failing to satisfy the source. If none, write "none found, with reasoning: <reasoning>".
+- **Verdict**: PASS | FAIL
+- **If FAIL**: the specific plan change required.
+
+### Anti-patterns that must FAIL this section
+
+- Skipping the fault-tolerance check because "the spec doesn't mention it." Worker restart and retry are always in scope; the plan must hold under them.
+- Skipping the race-condition check because "tests are single-threaded." Production has concurrent clients; the plan must hold under them.
