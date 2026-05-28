@@ -21,16 +21,17 @@ echo "Starting container '$CONTAINER'..."
 docker run -d \
   --name "$CONTAINER" \
   -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
-  -v "$HOME/.m2:/root/.m2" \
-  -v rama-gitlibs:/root/.gitlibs \
+  -v "$HOME/.m2:/home/agent/.m2" \
+  -v rama-gitlibs:/home/agent/.gitlibs \
   rama-challenges sleep infinity
 
 # Copy minimal Claude config (no conversation history, memory, or session state)
 echo "Copying Claude config into container..."
-docker exec "$CONTAINER" mkdir -p /root/.claude
-docker cp "$HOME/.claude/settings.json" "$CONTAINER:/root/.claude/settings.json"
+docker exec "$CONTAINER" mkdir -p /home/agent/.claude
+docker cp "$HOME/.claude/settings.json" "$CONTAINER:/home/agent/.claude/settings.json"
+docker exec "$CONTAINER" chown -R agent:agent /home/agent/.claude
 
 echo "Attaching to container..."
-docker exec -it "$CONTAINER" bash
+docker exec -it -u agent "$CONTAINER" bash
 
 echo "Container exited. To copy results back: ./scripts/docker-copy-back.sh"

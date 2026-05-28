@@ -18,19 +18,21 @@ RUN curl -sLO https://raw.githubusercontent.com/clj-kondo/clj-kondo/master/scrip
 RUN curl -sLO https://raw.githubusercontent.com/babashka/babashka/master/install \
     && chmod +x install && ./install && rm install
 
-# bbin (for clj-nrepl-eval)
-RUN mkdir -p /root/.local/bin \
-    && curl -o- -L https://raw.githubusercontent.com/babashka/bbin/v0.2.5/bbin > /root/.local/bin/bbin \
-    && chmod +x /root/.local/bin/bbin
-ENV PATH="/root/.local/bin:${PATH}"
+# bbin (for clj-nrepl-eval) — install to /usr/local/bin so all users can access
+RUN curl -o- -L https://raw.githubusercontent.com/babashka/bbin/v0.2.5/bbin > /usr/local/bin/bbin \
+    && chmod +x /usr/local/bin/bbin
 
 # clj-nrepl-eval + clj-paren-repair-claude-hook (both from clojure-mcp-light)
-RUN bbin install https://github.com/bhauman/clojure-mcp-light.git \
+# Install as root first, then copy to /usr/local/bin
+RUN mkdir -p /root/.local/bin \
+    && PATH="/root/.local/bin:$PATH" bbin install https://github.com/bhauman/clojure-mcp-light.git \
     --as clj-nrepl-eval \
     --main-opts '["-m" "clojure-mcp-light.nrepl-eval"]' \
-    && bbin install https://github.com/bhauman/clojure-mcp-light.git \
+    && PATH="/root/.local/bin:$PATH" bbin install https://github.com/bhauman/clojure-mcp-light.git \
     --as clj-paren-repair-claude-hook \
-    --main-opts '["-m" "clojure-mcp-light.hook"]'
+    --main-opts '["-m" "clojure-mcp-light.hook"]' \
+    && cp /root/.local/bin/clj-nrepl-eval /usr/local/bin/ \
+    && cp /root/.local/bin/clj-paren-repair-claude-hook /usr/local/bin/
 
 # clojure-lsp
 RUN curl -fsSL https://raw.githubusercontent.com/clojure-lsp/clojure-lsp/master/install \
@@ -45,4 +47,9 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && npm install -g @anthropic-ai/claude-code \
     && chmod +x /usr/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/*/rg
 
+# Non-root user (required for --permission-mode dangerouslySkipPermissions)
+RUN useradd -m -s /bin/bash agent \
+    && mkdir -p /work && chown agent:agent /work
+
 WORKDIR /work
+USER agent
