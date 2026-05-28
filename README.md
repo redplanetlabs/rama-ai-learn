@@ -1,6 +1,6 @@
 # rama-ai-learn
 
-A harness for developing a skill file for [Rama](https://redplanetlabs.com/), with the goal of one-shotting complex, scalable, fault-tolerant backends. The harness runs an LLM through a series of implementation challenges and captures every transcript in full and provides tooling for analyzing transcripts to inform edits to skill files. A challenge "passes" when the agent's implementation passes private tests covering correctness, performance, and fault-tolerance.
+A harness for developing skill files for [Rama](https://redplanetlabs.com/), with the goal of one-shotting complex, scalable, and fault-tolerant backends. The harness runs an LLM through a series of implementation challenges, captures every transcript in full, and provides tooling for analyzing transcripts to inform edits to skill files. A challenge succeeds when the agent's implementation passes private tests covering correctness, performance, and fault-tolerance.
 
 We're currently targeting the Clojure API, but a Java equivalent is planned.
 
