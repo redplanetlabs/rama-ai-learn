@@ -4,7 +4,7 @@ A harness for developing skill files for [Rama](https://redplanetlabs.com/), wit
 
 We're currently targeting the Clojure API, but a Java equivalent is planned.
 
-For the project's motivation, design, and progress updates, see [the blog post series](TODO).
+For the project's motivation, design, and progress updates, see [the blog post series](https://blog.redplanetlabs.com/2026/05/28/teaching-llms-to-one-shot-complex-backends-at-scale-report-1/).
 
 ## What's in the repo
 
