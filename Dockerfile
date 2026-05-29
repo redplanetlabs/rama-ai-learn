@@ -48,7 +48,8 @@ RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
 
 # Non-root user (required for --permission-mode bypassPermissions)
 RUN useradd -m -s /bin/bash agent \
-    && mkdir -p /work && chown agent:agent /work
+    && mkdir -p /work /transcripts /reports \
+    && chown agent:agent /work /transcripts /reports
 
 WORKDIR /work
 USER agent
