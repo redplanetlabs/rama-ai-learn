@@ -14,16 +14,14 @@ export const meta = {
   ],
 }
 
-// ---- resolve challenge name from the prompt ----
-// The workflow runtime passes the user's prompt as `context.userPrompt`.
-// Extract the challenge name from it, or fall back to env var.
+// ---- resolve challenge name from the workflow argument ----
+// The workflow is invoked as `/rama-challenge <name>`; the runtime injects
+// the argument text as the global `args`.
 function resolveChallengeName() {
-  // Try env var first (set by Babashka runner)
-  if (typeof process !== 'undefined' && process.env && process.env.CHALLENGE_NAME) {
-    return process.env.CHALLENGE_NAME
+  if (typeof args === 'string' && args.trim()) {
+    return args.trim()
   }
-  // Fall back: caller must have set it. Abort if missing.
-  throw new Error('CHALLENGE_NAME environment variable is required. Set it before running this workflow.')
+  throw new Error('Challenge name required. Invoke the workflow as `/rama-challenge <challenge-name>`.')
 }
 
 const CH = resolveChallengeName()

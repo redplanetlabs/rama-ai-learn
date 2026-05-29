@@ -3,6 +3,7 @@
 (require '[babashka.cli :as cli]
          '[babashka.fs :as fs]
          '[cheshire.core :as json]
+         '[clojure.java.io :as io]
          '[clojure.string :as str])
 
 (def cli-spec
@@ -21,15 +22,21 @@
    :compact {:desc "Compact tool results (first/last 5 lines)"
              :alias :c
              :coerce :boolean}
+   :stdin {:desc "Read JSONL from stdin and format live (also implied by '-' or no path)"
+           :coerce :boolean}
    :help {:desc "Show usage"
           :alias :h
           :coerce :boolean}})
 
 (defn print-usage []
-  (println "Usage: bb format-transcript [options] <transcript.jsonl>")
+  (println "Usage: bb format-transcript [options] [<transcript.jsonl> | -]")
   (println)
   (println "Format a Claude Code or Codex JSONL transcript for readable display.")
   (println "Auto-detects transcript format.")
+  (println)
+  (println "With '-', --stdin, or no path, reads JSONL from stdin and formats")
+  (println "each record live. Pipe a stream-json run into it, e.g.:")
+  (println "  claude --output-format stream-json --verbose -p '...' | bb format-transcript -")
   (println)
   (println "Options:")
   (println "  -T, --no-thinking       Hide thinking blocks")
@@ -37,6 +44,7 @@
   (println "  -H, --no-hooks          Hide hook events")
   (println "  -S, --no-system         Hide all system events")
   (println "  -c, --compact           Compact tool results (first/last 5 lines)")
+  (println "      --stdin             Read JSONL from stdin and format live")
   (println "  -h, --help              Show this help"))
 
 ;;; ANSI colors
@@ -310,69 +318,91 @@
 
 ;;; Main
 
+(defn- format-record!
+  "Format and print a single parsed JSONL record for the given format."
+  [fmt record opts]
+  (if (= fmt :codex)
+    (when-let [out (format-codex-record record opts)]
+      (println out))
+    (let [type (:type record)
+          subtype (:subtype record)]
+      (cond
+        ;; System events
+        (= type "system")
+        (cond
+          (= subtype "init")
+          (println (format-system-init record))
+
+          (and (= subtype "hook_started") (not (:no-hooks opts)) (not (:no-system opts)))
+          (println (format-system-hook record))
+
+          (and (= subtype "hook_response") (not (:no-hooks opts)) (not (:no-system opts)))
+          (println (format-hook-response record))
+
+          :else nil)
+
+        ;; Assistant messages
+        (= type "assistant")
+        (let [out (process-assistant-record record opts)]
+          (when-not (str/blank? out)
+            (println out)))
+
+        ;; User messages (including tool results)
+        (= type "user")
+        (let [out (process-user-record record opts)]
+          (when-not (str/blank? out)
+            (println out)))
+
+        ;; Rate limit
+        (= type "rate_limit_event")
+        (println (c :red (str "  ⏳ rate limited")))
+
+        :else nil))))
+
+(defn- parse-record [line]
+  (try (json/parse-string line true) (catch Exception _ nil)))
+
 (defn format-transcript
   "Read and format a JSONL transcript file."
   [path opts]
   (let [lines (vec (remove str/blank? (str/split-lines (slurp path))))
         fmt (detect-format (first lines))]
-    (doseq [line lines]
-      (let [record (try (json/parse-string line true) (catch Exception _ nil))]
-        (when record
-          (if (= fmt :codex)
-            (when-let [out (format-codex-record record opts)]
-              (println out))
-            (let [type (:type record)
-                  subtype (:subtype record)]
-              (cond
-                ;; System events
-                (= type "system")
-                (cond
-                  (= subtype "init")
-                  (println (format-system-init record))
+    (doseq [line lines
+            :let [record (parse-record line)]
+            :when record]
+      (format-record! fmt record opts))))
 
-                  (and (= subtype "hook_started") (not (:no-hooks opts)) (not (:no-system opts)))
-                  (println (format-system-hook record))
-
-                  (and (= subtype "hook_response") (not (:no-hooks opts)) (not (:no-system opts)))
-                  (println (format-hook-response record))
-
-                  :else nil)
-
-                ;; Assistant messages
-                (= type "assistant")
-                (let [out (process-assistant-record record opts)]
-                  (when-not (str/blank? out)
-                    (println out)))
-
-                ;; User messages (including tool results)
-                (= type "user")
-                (let [out (process-user-record record opts)]
-                  (when-not (str/blank? out)
-                    (println out)))
-
-                ;; Rate limit
-                (= type "rate_limit_event")
-                (println (c :red (str "  ⏳ rate limited")))
-
-                :else nil))))))))
+(defn stream-transcript
+  "Read JSONL records from stdin and format each as it arrives.
+  Detects format from the first non-blank line; flushes after every record
+  so output appears live when piped from `claude --output-format stream-json`."
+  [opts]
+  (let [fmt (volatile! nil)]
+    (with-open [rdr (io/reader *in*)]
+      (doseq [line (line-seq rdr)
+              :when (not (str/blank? line))
+              :let [_ (when-not @fmt (vreset! fmt (detect-format line)))
+                    record (parse-record line)]
+              :when record]
+        (format-record! @fmt record opts)
+        (flush)))))
 
 (defn -main [args]
-  (let [{:keys [opts args]} (cli/parse-args args {:spec cli-spec})]
+  (let [{:keys [opts args]} (cli/parse-args args {:spec cli-spec})
+        path (first args)]
     (cond
       (:help opts)
       (print-usage)
 
-      (empty? args)
-      (do (println "Error: transcript file path required")
-          (print-usage)
-          (System/exit 1))
+      ;; Stream from stdin: explicit "-", --stdin flag, or no path given
+      (or (:stdin opts) (= path "-") (nil? path))
+      (stream-transcript opts)
 
       :else
-      (let [path (first args)]
-        (when-not (fs/exists? path)
-          (println (str "Error: file not found: " path))
-          (System/exit 1))
-        (format-transcript path opts)))))
+      (do (when-not (fs/exists? path)
+            (println (str "Error: file not found: " path))
+            (System/exit 1))
+          (format-transcript path opts)))))
 
 (when (= *file* (System/getProperty "babashka.file"))
   (-main *command-line-args*))

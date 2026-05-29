@@ -27,9 +27,9 @@ docker run -d \
 
 # Copy minimal Claude config (no conversation history, memory, or session state)
 echo "Copying Claude config into container..."
-docker exec "$CONTAINER" mkdir -p /home/agent/.claude
+docker exec -u root "$CONTAINER" mkdir -p /home/agent/.claude
 docker cp "$HOME/.claude/settings.json" "$CONTAINER:/home/agent/.claude/settings.json"
-docker exec "$CONTAINER" chown -R agent:agent /home/agent/.claude
+docker exec -u root "$CONTAINER" chown -R agent:agent /home/agent/.claude
 
 echo "Attaching to container..."
 docker exec -it -u agent "$CONTAINER" bash
