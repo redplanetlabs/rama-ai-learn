@@ -1,33 +1,21 @@
 #!/usr/bin/env bash
 # Copy transcripts from the rama Docker container to the host.
 #
-# Filenames are of the form:
-#   {date}-{time}-{agent}[-{model}][-{reasoning}]-{challenge}-phase{N}[-attempt{K}].jsonl
-# All transcripts of one challenge run share the same {date}-{time} prefix
-# (the run-start-time stamped by the runner), so they can be grouped.
+# With the dynamic workflow, transcripts are:
+#   /transcripts/*.jsonl                           top-level session (one per challenge run)
+#   ~/.claude/projects/-work/*/subagents/workflows/wf_*/   per-phase subagent transcripts + journal
 #
 # Usage:
-#   ./scripts/docker-copy-transcript.sh                     # copy all transcripts of the most recent run into latest-transcripts/
-#   ./scripts/docker-copy-transcript.sh --phase N           # copy phase N of the most recent run to latest-transcript.jsonl
-#   ./scripts/docker-copy-transcript.sh --all               # copy every transcript in the container
+#   ./scripts/docker-copy-transcript.sh            # copy the most recent workflow run
+#   ./scripts/docker-copy-transcript.sh --all      # copy every transcript in the container
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CONTAINER="rama"
 
-mode="run"     # default: copy all transcripts of the most recent run
-phase=""
+mode="run"
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --phase)
-      mode="phase"
-      phase="${2:-}"
-      if [[ -z "$phase" ]]; then
-        echo "ERROR: --phase requires an argument" >&2
-        exit 2
-      fi
-      shift 2
-      ;;
     --all)
       mode="all"
       shift
@@ -48,53 +36,62 @@ if ! docker ps --format '{{.Names}}' | grep -q "^${CONTAINER}$"; then
   exit 1
 fi
 
-# Most recently mtime'd transcript in the container.
-LATEST=$(docker exec "$CONTAINER" bash -c 'ls -t /transcripts/*.jsonl 2>/dev/null | head -1')
-if [[ -z "$LATEST" ]]; then
-  echo "ERROR: No transcripts found in container." >&2
-  exit 1
-fi
+DEST="$REPO_ROOT/latest-transcripts"
+rm -rf "$DEST"
+mkdir -p "$DEST"
 
-LATEST_BASENAME=$(basename "$LATEST")
-
-# Run prefix = filename up to and including the challenge name, before the
-# `-phase{N}` suffix. Strip `-phaseN` and `-phaseN-attemptK` suffixes from the
-# matched basename, leaving the shared run-start-time + agent + challenge
-# prefix that all phases of the same run share.
-RUN_PREFIX=$(echo "$LATEST_BASENAME" | sed -E 's/-phase[0-9]+(-attempt[0-9]+)?\.jsonl$//; s/\.jsonl$//')
-
-case "$mode" in
-  all)
-    DEST="$REPO_ROOT/latest-transcripts"
-    rm -rf "$DEST"
-    mkdir -p "$DEST"
+# Copy top-level transcript(s) from /transcripts/
+TOP_COUNT=$(docker exec "$CONTAINER" bash -c 'ls /transcripts/*.jsonl 2>/dev/null | wc -l' | tr -d ' ')
+if [[ "$TOP_COUNT" -gt 0 ]]; then
+  if [[ "$mode" == "all" ]]; then
     docker exec "$CONTAINER" bash -c 'ls /transcripts/*.jsonl' | while read -r src; do
       docker cp "$CONTAINER:$src" "$DEST/$(basename "$src")"
     done
-    echo "Copied all transcripts to: $DEST"
-    ;;
-
-  run)
-    DEST="$REPO_ROOT/latest-transcripts"
-    rm -rf "$DEST"
-    mkdir -p "$DEST"
-    docker exec "$CONTAINER" bash -c "ls /transcripts/${RUN_PREFIX}-phase*.jsonl 2>/dev/null" \
-      | while read -r src; do
-          docker cp "$CONTAINER:$src" "$DEST/$(basename "$src")"
-        done
-    n=$(ls "$DEST" | wc -l | tr -d ' ')
-    echo "Copied $n transcripts (run: ${RUN_PREFIX}) to: $DEST"
-    ;;
-
-  phase)
-    # Find the latest attempt of the requested phase within the most recent run.
-    PHASE_PATTERN="/transcripts/${RUN_PREFIX}-phase${phase}*.jsonl"
-    LATEST_PHASE=$(docker exec "$CONTAINER" bash -c "ls -t ${PHASE_PATTERN} 2>/dev/null | head -1")
-    if [[ -z "$LATEST_PHASE" ]]; then
-      echo "ERROR: No transcript for phase $phase of run ${RUN_PREFIX}." >&2
-      exit 1
+    echo "Copied $TOP_COUNT top-level transcript(s)"
+  else
+    LATEST_TOP=$(docker exec "$CONTAINER" bash -c 'ls -t /transcripts/*.jsonl 2>/dev/null | head -1')
+    if [[ -n "$LATEST_TOP" ]]; then
+      docker cp "$CONTAINER:$LATEST_TOP" "$DEST/$(basename "$LATEST_TOP")"
+      echo "Copied top-level: $(basename "$LATEST_TOP")"
     fi
-    docker cp "$CONTAINER:$LATEST_PHASE" "$REPO_ROOT/latest-transcript.jsonl"
-    echo "Copied $(basename "$LATEST_PHASE") to $REPO_ROOT/latest-transcript.jsonl"
-    ;;
-esac
+  fi
+fi
+
+# Find workflow run dir(s)
+CLAUDE_PROJECTS="/home/agent/.claude/projects"
+
+if [[ "$mode" == "all" ]]; then
+  # Copy all wf_* dirs
+  WF_DIRS=$(docker exec "$CONTAINER" bash -c "find $CLAUDE_PROJECTS -type d -name 'wf_*' 2>/dev/null" || true)
+else
+  # Find the most recently modified wf_* dir
+  WF_DIRS=$(docker exec "$CONTAINER" bash -c "
+    find $CLAUDE_PROJECTS -type d -name 'wf_*' 2>/dev/null \
+      | while read d; do
+          latest=\$(find \"\$d\" -type f -printf '%T@\n' 2>/dev/null | sort -rn | head -1)
+          echo \"\${latest:-0} \$d\"
+        done \
+      | sort -rn | head -1 | cut -d' ' -f2-
+  " || true)
+fi
+
+if [[ -z "$WF_DIRS" ]]; then
+  echo "No workflow run directories found."
+else
+  for wf_dir in $WF_DIRS; do
+    wf_name=$(basename "$wf_dir")
+    wf_dest="$DEST/$wf_name"
+    mkdir -p "$wf_dest"
+
+    # Copy all files from the wf dir
+    docker exec "$CONTAINER" bash -c "ls '$wf_dir'/*.jsonl '$wf_dir'/*.json 2>/dev/null" \
+      | while read -r src; do
+          docker cp "$CONTAINER:$src" "$wf_dest/$(basename "$src")"
+        done
+
+    n=$(ls "$wf_dest" | wc -l | tr -d ' ')
+    echo "Copied $n files from $wf_name"
+  done
+fi
+
+echo "All transcripts saved to: $DEST"
