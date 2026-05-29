@@ -37,6 +37,16 @@ Adversarially validate the module source against `PLAN.md` and the spec. Produce
 
 Emit one of `PHASE_VALIDATION:pass`, `PHASE_VALIDATION:minor-fail`, or `PHASE_VALIDATION:major-fail` as the last non-empty line of your output. The artifact contains the detailed reasoning; the verdict line is what the calling system reads to decide the next move.
 
+## Orchestration routing
+
+This is a three-way verdict phase. The orchestrator uses the verdict to decide what happens next:
+
+- **pass** → proceed to Phase 5 (tests).
+- **minor-fail** → return to Phase 3 (implement) for a localized fix. After the fix, the orchestrator skips re-running Phase 4 on the next pass (the fix is too small to warrant re-validation) and proceeds directly to Phase 5. A misclassified minor-fail (should have been major) lets an architectural problem through without re-validation.
+- **major-fail** → return to Phase 3 (implement) for restructuring. After the fix, Phase 4 re-runs to validate the new architecture. A misclassified major-fail (should have been minor) wastes a full validation cycle on a one-line change.
+
+Up to 3 retry iterations per gate; if the cap is hit, the orchestrator proceeds to Phase 5.
+
 ## Do NOT
 
 - Do NOT default to PASS. The default is `major-fail`.

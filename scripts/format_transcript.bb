@@ -138,7 +138,7 @@
     (cond
       (str/blank? text) nil
       (:no-tool-results opts) nil
-      (:compact opts) (compact-text text 5)
+      (:compact opts) (compact-text text 8)
       :else text)))
 
 ;;; Event formatters

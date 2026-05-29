@@ -157,34 +157,20 @@
               (if (= batch cluster-batch) :cluster :local))
             challenges))
 
-;;; Agent abstraction
+;;; Agent command
 
 (def ^:private allowed-tools
-  "Tools the agent is allowed to use during challenge runs."
-  "Read,Write,Edit,Glob,Grep,Bash,Skill")
+  "Tools the agent is allowed to use during challenge workflow runs."
+  "Read,Write,Edit,Glob,Grep,Bash,Skill,Agent,Workflow,ToolSearch")
 
-(defn claude-phase-cmd
-  "Build the CLI command to invoke Claude for a single phase of a challenge."
-  [challenge-name phase-id _project-root model reasoning]
+(defn workflow-cmd
+  "Build the CLI command to invoke Claude with the rama-challenge workflow."
+  [challenge-name model reasoning]
   (cond-> ["claude" "--print" "--output-format" "stream-json" "--verbose"
            "--allowedTools" allowed-tools
-           "-p" (str "/challenge-phase " challenge-name " " phase-id)]
+           "-p" (str "/rama-challenge " challenge-name)]
     model     (into ["--model" model])
     reasoning (into ["--effort" reasoning])))
-
-(defn codex-phase-cmd
-  "Build the CLI command to invoke Codex for a single phase of a challenge.
-  Note: requires a $challenge-phase command in the codex skills setup."
-  [challenge-name phase-id project-root model reasoning]
-  (cond-> ["codex" "exec" "--json" "--dangerously-bypass-approvals-and-sandbox"
-           "-C" project-root]
-    model     (into ["--model" model])
-    reasoning (into ["-c" (str "model_reasoning_effort=" reasoning)])
-    true      (conj (str "$challenge-phase " challenge-name " " phase-id))))
-
-(def agents
-  {:claude {:phase-cmd claude-phase-cmd}
-   :codex  {:phase-cmd codex-phase-cmd}})
 
 ;;; Pricing
 
@@ -268,19 +254,13 @@
       ;; If exit code is 0 and no clear failure signal, assume pass
       :else :pass)))
 
-(defn parse-phase-verdict
-  "Extract PHASE_VALIDATION verdict from agent output. Returns one of
-  :pass, :fail, :minor-fail, :major-fail, or nil if no verdict line is present.
-  Phase 2 emits pass/fail. Phases 4 and 6 emit pass/minor-fail/major-fail.
-  Phase 7 (finish) emits pass/fail.
-
-  Returns the LAST verdict match in the output. The agent's output (stream-json)
-  includes the phase doc's verdict instructions in earlier tool_result events,
-  which contain literal PHASE_VALIDATION:pass/fail text. Only the final emitted
-  verdict matters, so we take the last occurrence."
+(defn parse-workflow-verdict
+  "Parse the overall verdict from a rama-challenge workflow run.
+  The workflow emits a DONE log line with either 'PASS' or 'INCOMPLETE'."
   [output]
-  (when-let [matches (seq (re-seq #"PHASE_VALIDATION:(minor-fail|major-fail|pass|fail)" output))]
-    (keyword (second (last matches)))))
+  (cond
+    (re-find #"PASS — test suite green" output) :pass
+    :else :fail))
 
 (def score-keys [:alignment :test-alignment])
 
@@ -958,262 +938,13 @@
                        (fs/exists? (fs/path d "README.md")))]
       (decrypt-challenge! enc-key name))))
 
-;;; Phase orchestration
-
-(def validation-retry-cap
-  "Max number of times a validation phase (2, 4, 6) can FAIL and retry the prior phase."
-  3)
-
-(defn impl-root-path
-  [project-root challenge-name]
-  (str (fs/path project-root "implementations" challenge-name)))
-
-(defn save-attempt!
-  "Snapshot the current implementation as attempts/attemptN.clj. Returns invoke-command! result."
-  [project-root challenge-name]
-  (invoke-command! ["bash" "scripts/save-attempt.sh" challenge-name] project-root))
-
-(defn run-phase!
-  "Invoke one phase of a challenge. Clamps the per-call timeout to whatever's
-  left in the overall run budget. Returns a result map with everything the
-  caller needs to decide next steps and accumulate per-phase telemetry."
-  [agent-fns challenge-name phase-id attempt
-   project-root agent-name model reasoning run-start-time run-start-millis]
-  (let [cmd ((:phase-cmd agent-fns) challenge-name phase-id project-root model reasoning)
-        remaining (long (time-remaining-s run-start-millis))
-        effective-timeout (min *outer-timeout-s* remaining)
-        _ (when *verbose*
-            (println (format "  Phase %d (attempt %d) starting (budget remaining: %ds, this-call cap: %ds)..."
-                             phase-id attempt remaining effective-timeout)))
-        {:keys [exit out err duration-s timed-out?]}
-        (binding [*outer-timeout-s* effective-timeout]
-          (invoke-command! cmd project-root))
-        combined (str out "\n" err)
-        verdict (parse-phase-verdict combined)
-        transcript-path (save-transcript! project-root agent-name model reasoning
-                                          challenge-name out phase-id attempt
-                                          run-start-time)
-        token-usage (parse-token-usage out)
-        cost (compute-cost token-usage (model->pricing model))
-        tool-uses (parse-tool-uses out)
-        skills-used (parse-skills-used out)
-        skill-refs-used (parse-skill-refs-used out)]
-    (when *verbose*
-      (println (format "  Phase %d (attempt %d) finished: exit=%d duration=%ds verdict=%s"
-                       phase-id attempt exit duration-s
-                       (if verdict (name verdict) "n/a"))))
-    {:phase-id phase-id
-     :attempt attempt
-     :exit exit
-     :timed-out? (boolean timed-out?)
-     :duration-s duration-s
-     :verdict verdict
-     :transcript-path transcript-path
-     :token-usage token-usage
-     :cost cost
-     :tool-uses tool-uses
-     :skills-used skills-used
-     :skill-refs-used skill-refs-used}))
-
-(defn aggregate-phase-results
-  "Sum per-phase telemetry across all phase invocations."
-  [phase-results]
-  (let [total-tokens   (token-totals (map :token-usage phase-results))
-        total-cost     (when (some :cost phase-results) (reduce + 0 (keep :cost phase-results)))
-        total-duration (reduce + 0 (map #(or (:duration-s %) 0) phase-results))
-        total-tool-uses (reduce + 0 (map #(or (:tool-uses %) 0) phase-results))
-        all-skills     (vec (sort (into #{} (mapcat :skills-used phase-results))))
-        all-skill-refs (vec (sort (into #{} (mapcat :skill-refs-used phase-results))))]
-    {:token-usage     total-tokens
-     :cost            total-cost
-     :duration-s      total-duration
-     :tool-uses       total-tool-uses
-     :skills-used     all-skills
-     :skill-refs-used all-skill-refs}))
-
-(defn phase-loop!
-  "Drive the phase loop. Returns a map:
-  {:status :pass | :fail | :timeout
-   :iterations int            ;; number of phase-3 invocations (impl attempts)
-   :phase-results [...]       ;; one per agent invocation
-   :test-output str           ;; final test output (when known)
-   :failure-reason str?       ;; populated on :fail/:timeout
-   :transcript-path str       ;; path to the most recent agent transcript}
-
-  Phase routing:
-  - 0 → 1 → 2
-  - 2 pass → 3, 2 fail → 1   (count toward gate 2's retry cap)
-  - 3 → 4 (unless skip-4 flag set, then 3 → 5)
-  - 4 pass → 5
-  - 4 minor-fail → 3 (set skip-4 to true; next time through, skip phase 4)
-  - 4 major-fail → 3 (don't set skip-4; phase 4 re-runs)
-  - 5 → 6
-  - 6 pass → 7
-  - 6 minor-fail → 7 (phase 7 absorbs the fix during its iterate loop;
-                      no fresh-context re-invocation of phase 5)
-  - 6 major-fail → 5 (full re-write needed; phase 6 re-runs after)
-  - 7 → done (verdict drives :status)
-
-  validation-retry-cap: max consecutive validation FAILs per gate (2, 4, 6).
-  Resets to 0 on PASS at that gate. Both minor-fail and major-fail count.
-
-  An overall wall-clock budget (*overall-timeout-s*) caps the entire run.
-  Checked at every loop iteration; per-call subprocess timeouts are clamped
-  to the remaining budget."
-  [agent-fns challenge-name project-root agent-name model reasoning
-   run-start-time run-start-millis]
-  (loop [phase-id 0
-         attempts {0 1, 1 1, 2 1, 3 1, 4 1, 5 1, 6 1, 7 1}
-         skip-flags {4 false}
-         validation-fail-counts {2 0, 4 0, 6 0}
-         results []]
-    (cond
-      ;; Overall budget exhausted — abort.
-      (<= (time-remaining-s run-start-millis) 0)
-      {:status :timeout
-       :iterations (max 1 (dec (get attempts 3 1)))
-       :phase-results results
-       :failure-reason (format "Overall challenge time budget (%ds) exceeded before phase %d."
-                               *overall-timeout-s* phase-id)
-       :transcript-path (:transcript-path (last results))}
-
-      ;; One-shot skip for phase 4 (after a minor-fail on the prior round).
-      (and (= phase-id 4) (get skip-flags 4))
-      (recur 5 attempts (assoc skip-flags 4 false) validation-fail-counts results)
-
-      :else
-      (let [attempt   (get attempts phase-id 1)
-            r         (run-phase! agent-fns challenge-name phase-id attempt
-                                  project-root agent-name model reasoning
-                                  run-start-time run-start-millis)
-            attempts' (assoc attempts phase-id (inc attempt))
-            results'  (conj results r)]
-        (cond
-          (:timed-out? r)
-          {:status :timeout
-           :iterations (max 1 (dec (get attempts' 3 1)))
-           :phase-results results'
-           :failure-reason (format "Phase %d (attempt %d) timed out." phase-id attempt)
-           :transcript-path (:transcript-path r)}
-
-          (not= 0 (:exit r))
-          {:status :fail
-           :iterations (max 1 (dec (get attempts' 3 1)))
-           :phase-results results'
-           :failure-reason (format "Phase %d (attempt %d) exited %d." phase-id attempt (:exit r))
-           :transcript-path (:transcript-path r)}
-
-          ;; Phase 2: binary verdict.
-          (= phase-id 2)
-          (cond
-            (= :pass (:verdict r))
-            (recur 3 attempts' skip-flags
-                   (assoc validation-fail-counts 2 0)
-                   results')
-
-            (= :fail (:verdict r))
-            (let [prior-fails (get validation-fail-counts 2 0)
-                  vfc' (assoc validation-fail-counts 2 (inc prior-fails))]
-              (if (< prior-fails validation-retry-cap)
-                (do (save-attempt! project-root challenge-name)
-                    (recur 1 attempts' skip-flags vfc' results'))
-                {:status :fail
-                 :iterations (max 1 (dec (get attempts' 3 1)))
-                 :phase-results results'
-                 :failure-reason (format "Phase 2 failed validation %d times consecutively."
-                                         (inc prior-fails))
-                 :transcript-path (:transcript-path r)}))
-
-            :else
-            {:status :fail
-             :iterations (max 1 (dec (get attempts' 3 1)))
-             :phase-results results'
-             :failure-reason "Phase 2 did not emit PHASE_VALIDATION verdict."
-             :transcript-path (:transcript-path r)})
-
-          ;; Phases 4 and 6: three-way verdict (pass/minor-fail/major-fail).
-          ;;
-          ;; Phase 4 routing:
-          ;;   pass       → phase 5
-          ;;   minor-fail → phase 3, skip phase 4 on next round (fix is too small to re-validate)
-          ;;   major-fail → phase 3, re-run phase 4 (architecture changed)
-          ;;
-          ;; Phase 6 routing:
-          ;;   pass       → phase 7
-          ;;   minor-fail → phase 7 (phase 7 absorbs the test fix during its iterate loop;
-          ;;                          no fresh-context re-invocation of phase 5 is paid)
-          ;;   major-fail → phase 5, re-run phase 6 (test suite needs restructuring)
-          (#{4 6} phase-id)
-          (cond
-            (= :pass (:verdict r))
-            (recur (inc phase-id) attempts' skip-flags
-                   (assoc validation-fail-counts phase-id 0)
-                   results')
-
-            (or (= :minor-fail (:verdict r)) (= :major-fail (:verdict r)))
-            (let [prior-fails (get validation-fail-counts phase-id 0)
-                  vfc' (assoc validation-fail-counts phase-id (inc prior-fails))
-                  next-phase (cond
-                               (and (= phase-id 6) (= :minor-fail (:verdict r))) 7
-                               (= phase-id 4) 3
-                               (= phase-id 6) 5)
-                  skip' (if (and (= phase-id 4) (= :minor-fail (:verdict r)))
-                          (assoc skip-flags 4 true)
-                          skip-flags)]
-              (if (< prior-fails validation-retry-cap)
-                (do (save-attempt! project-root challenge-name)
-                    (recur next-phase attempts' skip' vfc' results'))
-                {:status :fail
-                 :iterations (max 1 (dec (get attempts' 3 1)))
-                 :phase-results results'
-                 :failure-reason (format "Phase %d failed validation %d times consecutively."
-                                         phase-id (inc prior-fails))
-                 :transcript-path (:transcript-path r)}))
-
-            :else
-            {:status :fail
-             :iterations (max 1 (dec (get attempts' 3 1)))
-             :phase-results results'
-             :failure-reason (format "Phase %d did not emit a valid PHASE_VALIDATION verdict (got %s)."
-                                     phase-id (:verdict r))
-             :transcript-path (:transcript-path r)})
-
-          ;; Phase 7 (finish): binary verdict; loop ends with this status.
-          ;; The agent is responsible for getting the test suite passing inside
-          ;; its own session — no post-phase verification by the runner.
-          (= phase-id 7)
-          (cond
-            (= :pass (:verdict r))
-            {:status :pass
-             :iterations (max 1 (dec (get attempts' 3 1)))
-             :phase-results results'
-             :transcript-path (:transcript-path r)}
-
-            (= :fail (:verdict r))
-            {:status :fail
-             :iterations (max 1 (dec (get attempts' 3 1)))
-             :phase-results results'
-             :failure-reason "Phase 7 (finish) emitted FAIL — agent could not get tests passing."
-             :transcript-path (:transcript-path r)}
-
-            :else
-            {:status :fail
-             :iterations (max 1 (dec (get attempts' 3 1)))
-             :phase-results results'
-             :failure-reason (format "Phase 7 did not emit a valid PHASE_VALIDATION verdict (got %s)."
-                                     (:verdict r))
-             :transcript-path (:transcript-path r)})
-
-          ;; Non-validation phase: advance.
-          :else
-          (recur (inc phase-id) attempts' skip-flags
-                 validation-fail-counts results'))))))
+;;; Workflow invocation
 
 (defn run-challenge
-  "Run a single challenge through the agent. Returns a result map:
+  "Run a single challenge through the rama-challenge workflow. Returns a result map:
   {:name str, :status :pass/:fail, :iterations int, :duration-s int,
    :transcript-path str, :error str?, :private-status :pass/:fail/:skip}"
-  [challenge agent-name agent-fns project-root model reasoning enc-key]
+  [challenge agent-name project-root model reasoning enc-key]
   (let [challenge-name (:name challenge)]
     (try
       (clean-implementation-dir! project-root challenge-name)
@@ -1243,25 +974,28 @@
 
       (let [run-start-time (java.time.LocalDateTime/now)
             run-start-millis (System/currentTimeMillis)
-            phase-result (phase-loop! agent-fns challenge-name project-root
-                                      agent-name model reasoning
-                                      run-start-time run-start-millis)
-            _ (let [n-decrypted (decrypt-challenge! enc-key challenge-name)]
-                (when (and *verbose* (pos? n-decrypted))
-                  (println (format "Restored %d file(s) for %s" n-decrypted challenge-name))))
-            agg (aggregate-phase-results (:phase-results phase-result))
-            status (:status phase-result)
-            iterations (:iterations phase-result)
-            duration-s (:duration-s agg)
-            token-usage (:token-usage agg)
-            cost (:cost agg)
-            tool-uses (:tool-uses agg)
-            skills-used (:skills-used agg)
-            skill-refs-used (:skill-refs-used agg)
-            transcript-path (:transcript-path phase-result)
-            out (or (:test-output phase-result) "")
-            err (or (:failure-reason phase-result) "")
-            exit (case status :pass 0 :timeout 124 1)]
+            cmd (workflow-cmd challenge-name model reasoning)
+            _ (when *verbose*
+                (println (format "  Workflow starting (budget: %ds)..." *overall-timeout-s*)))
+            {:keys [exit out err duration-s timed-out?]}
+            (invoke-command! cmd project-root)
+            combined (str out "\n" err)
+            status (cond
+                     timed-out? :timeout
+                     (not= 0 exit) :fail
+                     :else (parse-workflow-verdict combined))
+            iterations 1
+            token-usage (parse-token-usage out)
+            cost (compute-cost token-usage (model->pricing model))
+            tool-uses (parse-tool-uses out)
+            skills-used (parse-skills-used out)
+            skill-refs-used (parse-skill-refs-used out)
+            transcript-path (save-transcript! project-root agent-name model reasoning
+                                              challenge-name out nil nil run-start-time)]
+
+        (when *verbose*
+          (println (format "  Workflow finished: exit=%d duration=%ds status=%s"
+                           exit duration-s (name status))))
 
         ;; Decrypt private files now that agent is done
         (decrypt-challenge! enc-key challenge-name)
@@ -1401,14 +1135,9 @@
 
 (defn run-challenges
   "Run all challenges sequentially, returning a vector of result maps."
-  [challenges agent-key agent-name project-root model reasoning enc-key]
-  (let [agent-fns (get agents agent-key)]
-    (when-not agent-fns
-      (binding [*out* *err*]
-        (println (str "Error: unknown agent '" (name agent-key) "'. Use 'claude' or 'codex'.")))
-      (System/exit 1))
-    (println)
-    (mapv #(run-challenge % agent-name agent-fns project-root model reasoning enc-key) challenges)))
+  [challenges agent-name project-root model reasoning enc-key]
+  (println)
+  (mapv #(run-challenge % agent-name project-root model reasoning enc-key) challenges))
 
 ;;; Formatting
 
@@ -1685,8 +1414,7 @@
                 (println "Including Batch 5 challenges with hidden setup."))
             valid-challenges (concat local cluster-with-setup (if cluster-available cluster-without-setup []))
             {:keys [valid missing]} (validate-challenges (vec valid-challenges) project-root)
-            agent-key (keyword (:agent opts))
-            agent-name (:agent opts)
+            agent-name (or (:agent opts) "claude")
             model (:model opts)
             reasoning (:reasoning opts)]
 
@@ -1706,7 +1434,7 @@
               start-ms      (System/currentTimeMillis)
               results       (binding [*verbose* (or (:verbose opts) (:pretty opts))
                                       *pretty* (boolean (:pretty opts))]
-                              (run-challenges valid agent-key agent-name project-root model reasoning enc-key))
+                              (run-challenges valid agent-name project-root model reasoning enc-key))
               total-elapsed-s (/ (- (System/currentTimeMillis) start-ms) 1000.0)]
           (print-summary-table results total-elapsed-s)
           (let [report-path (generate-report results agent-name project-root

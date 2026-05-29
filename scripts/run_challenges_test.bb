@@ -375,10 +375,7 @@
       (babashka.fs/create-dirs challenges-dir)
       (doseq [name ["listed-challenge"
                     "unlisted-challenge"
-                    "unlisted-hard"
-                    "_hard-template"
-                    "cluster-template"
-                    "cluster-shared"]]
+                    "unlisted-hard"]]
         (let [dir (babashka.fs/path challenges-dir name)]
           (babashka.fs/create-dirs dir)
           (spit (str (babashka.fs/path dir "README.md")) (str "# " name "\n"))))
@@ -400,67 +397,30 @@
         (finally
           (babashka.fs/delete-tree tmp-root))))))
 
-(deftest claude-phase-cmd-test
-  ;; Tests that claude-phase-cmd uses stream-json for transcript support,
-  ;; embeds the /challenge-phase invocation, and appends --model and --effort
-  ;; when provided.
-  (testing "claude-phase-cmd"
-    (testing "always uses stream-json output format"
-      (let [cmd (claude-phase-cmd "test-ch" 0 "/root" nil nil)]
+(deftest workflow-cmd-test
+  (testing "workflow-cmd"
+    (testing "uses stream-json output format and /rama-challenge prompt"
+      (let [cmd (workflow-cmd "test-ch" nil nil)]
         (is (some #{"stream-json"} cmd) "should use stream-json format")
-        (is (some #{"--verbose"} cmd) "should include --verbose")))
-    (testing "embeds the /challenge-phase invocation with name and phase-id"
-      (let [cmd (claude-phase-cmd "test-ch" 2 "/root" nil nil)]
-        (is (some #{"/challenge-phase test-ch 2"} cmd)
-            "should pass the slash command with name and phase-id")))
+        (is (some #{"--verbose"} cmd) "should include --verbose")
+        (is (some #{"/rama-challenge test-ch"} cmd)
+            "should pass the /rama-challenge prompt with name")))
     (testing "when model and reasoning are nil"
-      (let [cmd (claude-phase-cmd "test-ch" 0 "/root" nil nil)]
+      (let [cmd (workflow-cmd "test-ch" nil nil)]
         (is (not (some #{"--model"} cmd)) "should not contain --model")
         (is (not (some #{"--effort"} cmd)) "should not contain --effort")))
     (testing "when model is specified"
-      (let [cmd (claude-phase-cmd "test-ch" 0 "/root" "sonnet" nil)]
-        (is (some #{"--model"} cmd) "should contain --model")
-        (is (some #{"sonnet"} cmd) "should contain model value")
-        (is (not (some #{"--effort"} cmd)) "should not contain --effort")))
-    (testing "when reasoning is specified"
-      (let [cmd (claude-phase-cmd "test-ch" 0 "/root" nil "high")]
-        (is (not (some #{"--model"} cmd)) "should not contain --model")
-        (is (some #{"--effort"} cmd) "should contain --effort")
-        (is (some #{"high"} cmd) "should contain reasoning value")))
-    (testing "when both model and reasoning are specified"
-      (let [cmd (claude-phase-cmd "test-ch" 0 "/root" "sonnet" "medium")]
-        (is (some #{"--model"} cmd) "should contain --model")
-        (is (some #{"--effort"} cmd) "should contain --effort")))))
-
-(deftest codex-phase-cmd-test
-  ;; Tests that codex-phase-cmd passes --json for token tracking, embeds the
-  ;; $challenge-phase invocation, and adds --model / -c reasoning when given.
-  (testing "codex-phase-cmd"
-    (testing "always includes --json for token tracking"
-      (let [cmd (codex-phase-cmd "test-ch" 0 "/root" nil nil)]
-        (is (some #{"--json"} cmd) "should always contain --json")))
-    (testing "embeds the $challenge-phase invocation with name and phase-id"
-      (let [cmd (codex-phase-cmd "test-ch" 2 "/root" nil nil)]
-        (is (some #{"$challenge-phase test-ch 2"} cmd)
-            "should pass the codex prompt with name and phase-id")))
-    (testing "when model and reasoning are nil"
-      (let [cmd (codex-phase-cmd "test-ch" 0 "/root" nil nil)]
-        (is (not (some #{"--model"} cmd)) "should not contain --model")
-        (is (not (some #{"-c"} cmd)) "should not contain -c")))
-    (testing "when model is specified"
-      (let [cmd (codex-phase-cmd "test-ch" 0 "/root" "sonnet" nil)]
+      (let [cmd (workflow-cmd "test-ch" "sonnet" nil)]
         (is (some #{"--model"} cmd) "should contain --model")
         (is (some #{"sonnet"} cmd) "should contain model value")))
     (testing "when reasoning is specified"
-      (let [cmd (codex-phase-cmd "test-ch" 0 "/root" nil "high")]
-        (is (some #{"-c"} cmd) "should contain -c")
-        (is (some #{"model_reasoning_effort=high"} cmd) "should contain reasoning config")))
+      (let [cmd (workflow-cmd "test-ch" nil "high")]
+        (is (some #{"--effort"} cmd) "should contain --effort")
+        (is (some #{"high"} cmd) "should contain reasoning value")))
     (testing "when both model and reasoning are specified"
-      (let [cmd (codex-phase-cmd "test-ch" 0 "/root" "sonnet" "high")]
+      (let [cmd (workflow-cmd "test-ch" "sonnet" "medium")]
         (is (some #{"--model"} cmd) "should contain --model")
-        (is (some #{"sonnet"} cmd) "should contain model value")
-        (is (some #{"-c"} cmd) "should contain -c")
-        (is (some #{"model_reasoning_effort=high"} cmd) "should contain reasoning config")))))
+        (is (some #{"--effort"} cmd) "should contain --effort")))))
 
 (deftest reasoning-cli-parsing-test
   ;; Tests that --reasoning / -r is parsed by cli-spec and produces
@@ -544,31 +504,12 @@
         (finally
           (babashka.fs/delete-tree tmp-root))))))
 
-(deftest parse-phase-verdict-test
-  (testing "returns nil when no verdict present"
-    (is (nil? (parse-phase-verdict "just some text"))))
-
-  (testing "extracts simple verdicts"
-    (is (= :pass (parse-phase-verdict "PHASE_VALIDATION:pass")))
-    (is (= :fail (parse-phase-verdict "PHASE_VALIDATION:fail")))
-    (is (= :minor-fail (parse-phase-verdict "PHASE_VALIDATION:minor-fail")))
-    (is (= :major-fail (parse-phase-verdict "PHASE_VALIDATION:major-fail"))))
-
-  (testing "returns last verdict, not first (phase doc tool_result contaminates earlier in stream)"
-    (is (= :fail
-           (parse-phase-verdict
-             (str "Emit either PHASE_VALIDATION:pass or PHASE_VALIDATION:fail as the last line. "
-                  "...lots of agent reasoning here...\n"
-                  "PHASE_VALIDATION:fail\n"))))
-    (is (= :minor-fail
-           (parse-phase-verdict
-             (str "Emit one of PHASE_VALIDATION:pass, PHASE_VALIDATION:minor-fail, or "
-                  "PHASE_VALIDATION:major-fail as the last line.\n"
-                  "PHASE_VALIDATION:minor-fail\n")))))
-
-  (testing "minor-fail and major-fail are not parsed as :fail"
-    (is (= :minor-fail (parse-phase-verdict "PHASE_VALIDATION:minor-fail")))
-    (is (= :major-fail (parse-phase-verdict "PHASE_VALIDATION:major-fail")))))
+(deftest parse-workflow-verdict-test
+  (testing "returns :pass when PASS marker present"
+    (is (= :pass (parse-workflow-verdict "DONE [my-ch]: PASS — test suite green"))))
+  (testing "returns :fail when no PASS marker"
+    (is (= :fail (parse-workflow-verdict "DONE [my-ch]: INCOMPLETE — see Phase 7 summary")))
+    (is (= :fail (parse-workflow-verdict "some random output")))))
 
 (let [{:keys [fail error]} (run-tests)]
   (System/exit (if (zero? (+ fail error)) 0 1)))

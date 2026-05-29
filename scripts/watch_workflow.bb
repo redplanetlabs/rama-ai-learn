@@ -32,7 +32,8 @@
    :no-thinking {:desc "Hide thinking blocks" :alias :T :coerce :boolean}
    :no-tool-results {:desc "Hide tool result content" :alias :R :coerce :boolean}
    :no-system {:desc "Hide system events" :alias :S :coerce :boolean}
-   :compact {:desc "Compact tool results (first/last 5 lines)" :alias :c :coerce :boolean}
+   :compact {:desc "Compact tool results (first/last 8 lines, default: on)" :alias :c :coerce :boolean :default true}
+   :full {:desc "Show full output (disable compact and no-thinking defaults)" :alias :F :coerce :boolean}
    :help {:desc "Show usage" :alias :h :coerce :boolean}})
 
 (defn print-usage []
@@ -48,10 +49,11 @@
   (println "      --from-now          Skip the backlog; only show records written after start")
   (println "      --poll MS           Poll interval in ms (default 400)")
   (println "      --stale SECS        Stale-run warning threshold (default 120)")
-  (println "  -c, --compact           Compact tool results (first/last 5 lines)")
+  (println "  -c, --compact           Compact tool results, first/last 8 lines (default: on)")
   (println "  -T, --no-thinking       Hide thinking blocks")
   (println "  -R, --no-tool-results   Hide tool result content")
   (println "  -S, --no-system         Hide system events")
+  (println "  -F, --full              Show full output (disable compact default)")
   (println "  -h, --help              Show this help"))
 
 ;;; Discovery
@@ -213,7 +215,10 @@
       (recur))))
 
 (defn -main [args]
-  (let [{:keys [opts]} (cli/parse-args args {:spec watch-cli-spec})]
+  (let [{:keys [opts]} (cli/parse-args args {:spec watch-cli-spec})
+        opts (if (:full opts)
+               (assoc opts :compact false)
+               opts)]
     (if (:help opts)
       (print-usage)
       (run opts))))
