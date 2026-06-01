@@ -458,7 +458,7 @@
   "Outer timeout for a single subprocess invocation (seconds).
   Phase invocations bind this to min(default, time-remaining-in-overall-budget)
   so a single phase can't exceed either the per-call cap or the run-wide cap."
-  3600)
+  10800)
 
 (def ^:dynamic *overall-timeout-s*
   "Hard cap on total wall-clock for one challenge run (seconds).
