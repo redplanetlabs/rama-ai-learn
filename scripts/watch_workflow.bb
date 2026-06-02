@@ -167,7 +167,9 @@
 (defn- render-journal-line! [line]
   (when-let [rec (parse-record line)]
     (when (= "result" (:type rec))
-      (let [summary (first (str/split-lines (or (:result rec) "")))]
+      (let [raw (:result rec)
+            result-str (if (string? raw) raw (json/generate-string raw))
+            summary (first (str/split-lines (or result-str "")))]
         (println (c :green (str "  ✓ " (clip (or (:agentId rec) "") 8) "  " (clip summary 140))))
         (flush)))))
 
