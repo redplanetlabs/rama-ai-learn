@@ -4,108 +4,138 @@ Microbatch topologies provide exactly-once PState updates, cross-partition atomi
 
 **Choosing stream vs microbatch:** Default to microbatch. Use stream only when: (1) single-digit millisecond update latency is required, or (2) append coordination is needed (stream participates in depot ack, enabling write-then-read-back patterns).
 
-## Formal model
+## Core concepts
 
-### Source binding
+### Source binding and emitting records
 
-```text
-(Source-Microbatch)
-Γ; o; M; microbatch ⊢ source>(depot, opts, :> %mb) : Batch τ    -- %mb is a fragment var
-                       (%mb :> *x) emits individual records
+Microbatch sources bind to **fragment vars** (`%mb`), not value vars. The fragment var represents the current batch of records across all tasks. Emitting from it with `(%mb :> *record)` iterates over all records in this microbatch on every task where records landed.
+
+```clojure
+(let [mb (microbatch-topology topologies "core")]
+  (<<sources mb
+    (source> *my-depot :> %mb)
+    (%mb :> {:keys [*user-id *value]})
+    ;; dataflow continues here, processing each record across all tasks
+    (local-transform> [(keypath *user-id) (termval *value)] $$my-pstate)))
 ```
 
-Microbatch sources bind to **fragment vars** (`%mb`), not value vars.
+You do NOT have to emit from the fragment var immediately or only once. If you need to run code that is disconnected from the fragment var, or you need to use the fragment var in multiple independent computations, use `<<batch` blocks.
 
-### Transaction scope
+### `<<batch` blocks
+
+`<<batch` is the microbatch equivalent of a barrier — it does NOT continue past the `<<batch` until the entire batch block has completed across ALL tasks. This makes it the right tool for multi-step processing within a single microbatch where later steps depend on earlier steps being globally complete.
+
+```clojure
+(<<sources mb
+  (source> *my-depot :> %mb)
+
+  ;; First batch block: process all records and materialize results
+  (<<batch
+    (%mb :> {:keys [*user-id *value]})
+    (local-transform> [(keypath *user-id) (termval *value)] $$my-pstate))
+
+  ;; Second batch block: runs AFTER the first has completed on all tasks.
+  ;; Can read PState values written by the first block, or use materialized
+  ;; temporary PStates.
+  (<<batch
+    (%mb :> {:keys [*user-id]})
+    (local-select> [(keypath *user-id)] $$my-pstate :> *current-value)
+    ;; ... further processing with the updated values ...
+    ))
+```
+
+Key properties of `<<batch`:
+- Everything inside one `<<batch` is one batch block with pre-agg / agg / post-agg phases (see [batch reference](batch.md)).
+- Code after a `<<batch` does not execute until the batch block completes globally.
+- You can emit from the fragment var (`%mb`) inside a `<<batch` — this is the normal way to process microbatch records.
+- Multiple `<<batch` blocks run sequentially. Use this when step 2 needs step 1's results to be fully committed across all tasks.
+- `<<batch` is valid in microbatch topologies (not stream).
+- `<<batch` can only be invoked from task 0 (where microbatch processing always starts)
+- `local-transform>` is permitted in `<<batch` pre-agg (unlike query topology batch blocks which are read-only).
+
+### When to use `<<batch` vs direct emit
+
+**Direct emit** (no `<<batch`): Simple cases where you process each record independently and don't need cross-record or cross-task coordination within the microbatch.
+
+```clojure
+(<<sources mb
+  (source> *depot :> %mb)
+  (%mb :> *record)
+  ;; simple per-record processing
+  (local-transform> [...] $$pstate))
+```
+
+**`<<batch`**: When you need any of:
+- Aggregation across records (e.g., counting, summing, grouping)
+- Materialization of intermediate results for use in later steps
+- Multiple passes over the same microbatch data
+- Code that runs independently of the data in the microbatch
+
+## Running code disconnected from microbatch data
+
+A `<<batch` block does not have to emit from a fragment var. It can run code that is completely independent of the incoming microbatch data. For example:
+
+```clojure
+(<<sources mb
+  (source> *tick-depot :> %tick)
+  (%tick)
+
+  (source> *events :> %mb)
+
+  ;; Batch 1: background work, independent of incoming events.
+  ;; Runs every microbatch cycle. Does not read from %mb.
+  (<<batch
+    (|all)
+    (local-select> ALL $$pending-work {:allow-yield? true} :> [*key *state])
+    ;; ... process pending work items, update $$pending-work ...
+    )
+
+  ;; Batch 2: process incoming events. Runs AFTER Batch 1 completes.
+  (<<batch
+    (%mb :> {:keys [*id *value]})
+    ;; ... process each event ...
+    ))
+```
+
+Because `<<batch` is a global barrier, Batch 2 sees the results of Batch 1 across all tasks.
+
+**Tick depots for timely background work.** A microbatch topology enters lightweight polling mode when its subscribed depots have no new data and does not run the microbatch. If the background work needs to run on a regular cadence regardless of whether new events arrive, subscribe the topology to a **tick depot** (`declare-tick-depot`) that fires periodically. Emit from the tick fragment var (`(%tick)`) without binding any output — this forces the microbatch to run on every tick even when `*events` has no new data. Without a tick depot, the background `<<batch` only runs when new events arrive on other subscribed depots.
+
+## Transaction scope
+
+Cross-partition atomicity by construction: `Write $$p1` then partitioner then `Write $$p2` remain one transaction within a microbatch attempt.
 
 ```text
 txn-scope(microbatch) = microbatch-attempt   -- entire attempt across all tasks
-
-(Txn-Preserve)
-Γ; o; M; microbatch ⊢ e : τ ! ε    Partitioner ∈ ε
-───────────────────────────────────────────────────────
-e does NOT fragment the Txn: all Write effects remain in one
-atomic scope (single Txn microbatch)
 ```
 
-Cross-partition atomicity by construction: `Write $$p₁` then partitioner then `Write $$p₂` remain one transaction.
+## Guarantees
 
-### Guarantees
+- **Exactly-once PState updates** across retries of the same microbatch ID. Non-deterministic ops (`|shuffle`, mirror reads) may vary per retry, but PState writes converge.
+- **Depot appends** (`depot-partition-append!`) from microbatch code do NOT have exactly-once semantics on retry. A retry re-appends.
+- **Phases per attempt:** prime (clear buffers, reset PStates to previous state) → process → commit (checkpoint + replicate; PState changes visible atomically).
 
-```text
-(Microbatch-ExactlyOnce)
-retry(microbatch-id) ⟹ PState updates exactly-once
-                     -- same depot records replayed deterministically
-                     -- non-deterministic ops (|shuffle, mirror reads) may vary
+## Ack semantics
 
-(Microbatch-Append-NoGuarantee)
-depot-partition-append! in microbatch ⟹ NOT exactly-once on retry
+`:ack` on `foreign-append!` confirms **depot durability only**, not PState visibility. Microbatch processing is decoupled from the append ack — the PState update happens later when the microbatch processes and commits.
 
-(Microbatch-Phases)
-attempt = prime → process → commit
-prime   : clear buffers, reset PStates to previous microbatch state
-commit  : checkpoint + replicate; PState changes visible atomically
+## Testing with InProcessCluster
+
+`wait-for-microbatch-processed-count` is a **test-only** function from `com.rpl.rama.test`. It blocks until a microbatch topology has processed at least `n` records from its source depot. Use it in tests with `InProcessCluster` to synchronize writes and reads:
+
+```clojure
+(require '[com.rpl.rama.test :as rtest])
+
+;; In test code with an IPC:
+(foreign-append! depot data)
+(rtest/wait-for-microbatch-processed-count ipc "my.ns/MyModule" "topo-name" 1)
+;; Now safe to read PState — the microbatch has committed
+(foreign-select-one [(keypath k)] pstate)
 ```
 
-### Ack semantics
+The count `n` is cumulative across the IPC's lifetime — if you've appended 5 records total, pass 5 to wait for all of them. Keep a running counter.
 
-```text
-(Ack-Own-Microbatch)
-foreign-append!(d : Depot α M V, val, :ack) returns
-  where Owner(d) = Mod M
-⊢ Depot(M): Committed
-⊬ PState(M): Visible                       -- microbatch decoupled from append ack
-```
-
-### Read-after-write
-
-```text
-(RAW-Microbatch)
-foreign-append!(depot, val, :ack) returns
-⊬ foreign-select-one(path, $$p) observes val's effects   -- NOT guaranteed
-
-(RAW-Microbatch-Barrier)
-foreign-append!(depot, val, ack) returns
-wait-for-microbatch-processed-count(ipc, mod, topo, n) returns  -- n ≥ append count
-⊢ foreign-select-one(path, $$p) observes val's effects
-```
-
-### `<<batch` validity
-
-```text
-m ∈ {microbatch, query}
-────────────────────────
-Γ; o; M; m ⊢ <<batch(pre-agg, agg, post-agg) : τ ! ε
-```
-
-`<<batch` is valid in microbatch topologies. See [batch reference](batch.md) for batch block semantics.
-
-### Execution context
-
-```text
-                    TopoBody  QueryBody  FnBody  OpBody  BatchBlock  ClientCode
-<<batch                ✗(1)      impl     ✗       ✗        —           ✗
-local-transform>       ✓         ✗(2)     ✗       ✗        ✓(mb)       ✗
-```
-
-(1) `<<batch` valid in microbatch `TopoBody`; invalid in stream `TopoBody`.
-
-`local-transform>` is permitted in microbatch batch block post-agg (but not in query topology post-agg, which is read-only).
-
-## Syntax
-
-```ebnf
-topology-def      = '(let' '[' topo-var '(microbatch-topology' 'topologies' string ')' ']' body ')' ;
-
-microbatch-source = '(source>' depot-var [ source-opts ] ':>' frag-var ')' ;
-microbatch-emit   = '(' frag-var ':>' binding ')' ;
-
-pause-mb          = '(pause-microbatch-topology!' ipc module-name string ')' ;
-resume-mb         = '(resume-microbatch-topology!' ipc module-name string ')' ;
-wait-mb           = '(wait-for-microbatch-processed-count' ipc module-name string int ')' ;
-
-current-mb-id     = '(ops/current-microbatch-id' ':>' binding ')' ;
-```
+**Do NOT use `wait-for-microbatch-processed-count` in production code, module code, or client wrappers.** It exists only in `com.rpl.rama.test` for InProcessCluster testing. In production, microbatch processing happens asynchronously and clients read eventually-consistent PState values.
 
 ## Quick reference
 
@@ -114,29 +144,11 @@ current-mb-id     = '(ops/current-microbatch-id' ':>' binding ')' ;
 | Microbatch topology | `(let [mb (microbatch-topology topologies "mb")] ...)` |
 | Microbatch source | `(source> *depot :> %microbatch)` |
 | Emit microbatch items | `(%microbatch :> *data)` |
+| Batch block | `(<<batch (%microbatch :> *data) ... (aggs/+sum *v :> *total) ...)` |
 | Current microbatch ID | `(ops/current-microbatch-id :> *mbid)` |
-| Pause microbatch | `(pause-microbatch-topology! ipc "ns/Mod" "topo")` |
-| Resume microbatch | `(resume-microbatch-topology! ipc "ns/Mod" "topo")` |
-| Wait for microbatch | `(wait-for-microbatch-processed-count ipc "ns/Mod" "topo" n)` |
-
-## Handler patterns
-
-- Per attempt phases: prime → process → commit. All PState changes visible atomically after commit.
-- Exactly-once PState updates across retries of same microbatch ID. Non-deterministic ops (`|shuffle`, mirror reads) may vary per retry.
-- Depot appends from microbatch code do NOT have exactly-once semantics on retry.
-- `:ack` confirms depot durability only, not PState visibility. Use `wait-for-microbatch-processed-count` for read-after-write (RAW-Microbatch-Barrier).
-- Checkpoint: microbatch ID/version in internal PState `$$__microbatcher-state-<topologyId>`. Last two versions retained for recovery.
-
-## Blocking client recipe
-
-Append first (`:append-ack`), then wait for processed count `N+1`. Keep the count target monotonic per client/session.
-
-```clojure
-(r/foreign-append! depot data :append-ack)
-(r/wait-for-microbatch-processed-count ipc mod-name "topo" (inc n))
-;; now safe to read
-(r/foreign-select-one [(keypath k)] pstate)
-```
+| Pause (test only) | `(rtest/pause-microbatch-topology! ipc "ns/Mod" "topo")` |
+| Resume (test only) | `(rtest/resume-microbatch-topology! ipc "ns/Mod" "topo")` |
+| Wait (test only) | `(rtest/wait-for-microbatch-processed-count ipc "ns/Mod" "topo" n)` |
 
 ## Config
 
@@ -150,5 +162,5 @@ Append first (`:append-ack`), then wait for processed count `N+1`. Keep the coun
 ## Troubleshooting
 
 - `declare-microbatch-topology` does not exist — use `microbatch-topology`. No `<<microbatch` macro — use `(microbatch-topology topologies "name")` then `(<<sources mb ...)`.
-- Stale reads after microbatch write — `:ack` does not guarantee PState visibility. Use `wait-for-microbatch-processed-count`.
+- Stale reads after microbatch write — `:ack` does not guarantee PState visibility. In tests, use `wait-for-microbatch-processed-count`. In production, reads are eventually consistent.
 - Source binding must use fragment vars (`%mb`), not value vars (`*x`).
