@@ -119,6 +119,27 @@ txn-scope(microbatch) = microbatch-attempt   -- entire attempt across all tasks
 
 `:ack` on `foreign-append!` confirms **depot durability only**, not PState visibility. Microbatch processing is decoupled from the append ack — the PState update happens later when the microbatch processes and commits.
 
+## Idempotent writes to non-PState stores
+
+PState updates are automatically exactly-once across microbatch retries, but writes to TaskGlobals, external databases, or other non-PState stores are NOT rolled back on retry. Use `ops/current-microbatch-id` to make these writes idempotent.
+
+`(ops/current-microbatch-id :> *mb-id)` returns an opaque identifier that is the same across retries of the same microbatch. It increments by one for every new microbatch. Store it alongside your non-PState write and check it before writing:
+
+```clojure
+(<<sources mb
+  (source> *events :> %mb)
+  (<<batch
+    (%mb :> {:keys [*id *value]})
+    ;; ... process records ...
+    (ops/current-microbatch-id :> *mb-id)
+    ;; Pass *mb-id to your update function.
+    ;; The function checks if it has already seen this *mb-id
+    ;; and skips the write if so.
+    (my-idempotent-update! *my-non-pstate-store *id *value *mb-id)))
+```
+
+This is the standard pattern for achieving exactly-once semantics on writes that Rama cannot automatically roll back. Without this check, a microbatch retry re-executes the same writes, potentially duplicating side effects.
+
 ## Testing with InProcessCluster
 
 `wait-for-microbatch-processed-count` is a **test-only** function from `com.rpl.rama.test`. It blocks until a microbatch topology has processed at least `n` records from its source depot. Use it in tests with `InProcessCluster` to synchronize writes and reads:

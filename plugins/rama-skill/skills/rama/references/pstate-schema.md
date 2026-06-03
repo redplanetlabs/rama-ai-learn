@@ -46,6 +46,8 @@ Vectors and sets cannot be top-level. Use `java.util.ArrayList` or
   - Sorting is lexicographic based on the serialized form of the key
 - O(1) size queries (when size tracking is on)
 
+**Critical constraint:** A subindexed structure is NOT a plain value — it is a handle to RocksDB storage. It can be used like a plain data structure, but it cannot be transferred over network boundaries. Queries must always navigate INTO it using element/range navigators (`ALL`, `MAP-VALS`, `MAP-KEYS`, `sorted-map-range`, `sorted-set-range-from-start`, etc.) to access individual elements, which are plain serializable values.
+
 ### When to Subindex
 
 **Default to subindexing** nested data structures unless the application design makes it clear the collection will always be small (< 50 elements). The overhead of subindexing on small collections is minimal, but failing to subindex a collection that grows large causes serious performance problems — every read/write loads the entire serialized collection from disk.

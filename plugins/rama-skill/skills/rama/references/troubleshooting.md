@@ -50,6 +50,27 @@ Parenthesization error in `<<if`/`(else>)`. Both then and else branches accept a
   (do-other))
 ```
 
+## Runtime / serialization errors
+
+### "Serializer not defined for type class rpl.rama.durable.RocksDBWrapper"
+
+You selected a subindexed structure as a whole value — for example, navigating to `(keypath *id)` on a PState where the value at that key is a subindexed map, set, or vector. Subindexed structures are backed by RocksDB and cannot be treated as plain values. They cannot be serialized across tasks, returned from query topologies, or passed through partitioners.
+
+Navigate INTO the subindexed structure instead. Use `ALL`, `MAP-VALS`, `MAP-KEYS`, `sorted-map-range`, `sorted-set-range-from-start`, or other range/element navigators to iterate individual elements, which are plain serializable values:
+
+```clojure
+;; WRONG — selects the subindexed map itself (RocksDB-backed, not serializable)
+(local-select> (keypath *id) $$items :> *whole-map)
+
+;; RIGHT — iterates elements within the subindexed map
+(local-select> [(keypath *id) ALL] $$items :> [*k *v])
+
+;; RIGHT — range scan within the subindexed map
+(local-select> [(keypath *id) (sorted-map-range-from-start 100)] $$items :> [*k *v])
+```
+
+This applies everywhere subindexed values cross a serialization boundary: direct PState queries, query topology results, partitioner hops, mirror reads, and `select>` (which has an implicit partitioner).
+
 ## Module declaration errors
 
 ### "Unable to resolve classname: MyModule"
