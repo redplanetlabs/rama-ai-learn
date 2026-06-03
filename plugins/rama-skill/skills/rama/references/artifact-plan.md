@@ -49,3 +49,26 @@ If stream: can a partial failure + retry leave any writes permanently unexecuted
 - $$name (PState): per-source-event write volume O(?) in <bounded inputs>. Durable.
 - *cache (TaskGlobal): non-durable. Rebuild by reading from PState on each cache miss. Cite the code that does it.
 - external: <name>  -->
+
+## Resource usage analysis
+<!-- For each storage location (PState, TaskGlobal), estimate the resource footprint per task under load. The goal is to minimize memory and disk usage while staying within latency constraints.
+
+### Disk usage (PStates)
+For each PState and depot, estimate bytes per entry and total size per task:
+- Entry size: key size + value size (include all fields, nested structures, index overhead for subindexed structures)
+- Growth rate: how many entries per unit time
+- Total per task: entries × entry size / number of tasks
+
+### Memory usage (TaskGlobals)
+For each TaskGlobal, estimate:
+- Entry size in bytes: count every field stored per entry. Use primitives (long, int) instead of boxed objects (Long, Integer) where possible.
+- Entries per task: worst-case count
+- Total memory per task: entries × entry size
+- GC pressure: large object graphs with many small maps/vectors create GC overhead. Prefer flat structures, primitive arrays, or compact representations.
+
+### Minimization
+For each storage location, state whether the current design is minimal or whether data could be reduced:
+- Can data be fetched from a PState at query time instead of cached in memory without violating latency requirements?
+- Can fields be stored as primitives instead of objects?
+- Can per-entry overhead be reduced by using arrays or packed representations instead of maps?
+- Does the design duplicate data across storage locations? If so, justify why (latency constraint) or eliminate. -->
