@@ -81,8 +81,10 @@ For each processing concern, consider:
 A module can have **multiple topologies** of different types. All PState symbols are module-scoped — any topology can read any PState in the module (seeing the last committed value), but only the owning topology can write to it. Use internal depots (`:disallow` + `depot-partition-append!`) to pass data between topologies within the same module.
 
 Topology types:
-- **Microbatch** (default): exactly-once semantics from depot to PState — if a microbatch retries, all PState updates are applied exactly once. Cross-partition atomic writes within a microbatch. However, higher latency than streaming (at least 300ms) and no coordination with depot appends.
+- **Microbatch** (default): exactly-once semantics from depot to PState — if a microbatch retries, all PState updates are applied exactly once. Cross-partition atomic writes within a microbatch. Higher latency than streaming (at least 300ms) and no coordination with depot appends. Microbatch also offers `<<batch` blocks and multi-step processing patterns that stream does not — read `references/microbatch.md` for the full capabilities.
 - **Stream**: low-latency, at-least-once or at-most once. Stream topologies can retry, so non-idempotent writes could produce duplicates.
+
+**Read BOTH `references/microbatch.md` AND `references/stream.md` before choosing topology types.** Do NOT skip either reference — the topology choice must be informed by the full capabilities of both, not just latency.
 
 If the design requires any of these, read the corresponding reference:
 - Unique ID generation either client-side or within topologies → read `references/unique-ids.md`

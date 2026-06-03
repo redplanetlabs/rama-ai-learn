@@ -68,7 +68,7 @@ For each TaskGlobal, estimate:
 
 ### Minimization
 For each storage location, state whether the current design is minimal or whether data could be reduced:
-- Can data be fetched from a PState at query time instead of cached in memory without violating latency requirements?
+- Can any of the data in the cache be fetched from a PState at query time instead of cached in memory without violating latency requirements?
 - Can fields be stored as primitives instead of objects?
 - Can per-entry overhead be reduced by using arrays or packed representations instead of maps?
 - Does the design duplicate data across storage locations? If so, justify why (latency constraint) or eliminate. -->
