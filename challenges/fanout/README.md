@@ -4,6 +4,9 @@ Build a module that stores account profiles, processes posts, and
 materializes per-user timelines. Your module runs **alongside** the
 provided `fanout.social-graph` module.
 
+Assume the social graph is heavily unbalanced, with most users having less than a hundred followers,
+and some having millions.
+
 ## What you are given
 
 `fanout.social-graph/SocialGraphModule` (in `src/fanout/social_graph.clj`)
