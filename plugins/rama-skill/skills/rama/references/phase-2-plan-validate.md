@@ -40,6 +40,13 @@ If any check is FAIL: report FAIL, with each failure explicitly listing the spec
 
 If every check passes after honest scenario-tracing: report PASS.
 
+## Orchestration routing
+
+This is a binary verdict phase. The orchestrator uses the verdict to decide what happens next:
+
+- **pass** → proceed to Phase 3 (implement).
+- **fail** → return to Phase 1 (plan) for revision. The plan author reads `PLAN_VALIDATION.md` and addresses every FAIL item. Up to 3 retry iterations; if the cap is hit, the orchestrator proceeds to Phase 3 with the best plan so far.
+
 ## Do NOT
 
 - Do NOT default to PASS. The default is FAIL.

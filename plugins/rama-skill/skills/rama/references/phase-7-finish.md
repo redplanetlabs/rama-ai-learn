@@ -40,6 +40,13 @@ Emit one of these as the LAST non-empty line of your output:
 - The test sources (`<impl-root>/test/...`) in their final state.
 - The verdict line.
 
+## Orchestration routing
+
+This is a binary verdict phase. The orchestrator uses the verdict to decide what happens next:
+
+- **pass** → done. Overall result: PASS.
+- **fail** → retry with a fresh session (up to 2 sessions total). If both fail, overall result: FAIL.
+
 ## Do NOT
 
 - Do NOT delete failing test cases to make the suite pass.
