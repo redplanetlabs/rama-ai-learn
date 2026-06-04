@@ -21,6 +21,10 @@ Microbatch sources bind to **fragment vars** (`%mb`), not value vars. The fragme
 
 You do NOT have to emit from the fragment var immediately or only once. If you need to run code that is disconnected from the fragment var, or you need to use the fragment var in multiple independent computations, use `<<batch` blocks.
 
+### Sequential processing of microbatches
+
+Microbatches process sequentially, and the next one does not start until all data in the current microbatch finishes processing and committing all changes to PStates. So a record that is appended to a depot immediately after a microbatch starts will not have its changes visible until two microbatches have run and finished.
+
 ### `<<batch` blocks
 
 `<<batch` is the microbatch equivalent of a barrier — it does NOT continue past the `<<batch` until the entire batch block has completed across ALL tasks. This makes it the right tool for multi-step processing within a single microbatch where later steps depend on earlier steps being globally complete.

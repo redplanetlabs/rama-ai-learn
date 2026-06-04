@@ -21,9 +21,10 @@ Your implementation must satisfy `fanout.protocol/Fanout`. See
 
 ## Constraints
 
-1. Fanout MUST NOT write to any PState or depot. The write volume of
-   fanout is O(followers × posts) — too expensive for durable storage.
-   Writes on fanout can only be to in-memory state.
+1. Fanout delivery MUST NOT write to any PState or depot per follower.
+   The write volume of O(followers × posts) is too expensive for durable
+   storage. The per-follower writes during fanout can only be to
+   in-memory state.
 
    In-memory state is lost on worker restart. You MUST find another way
    to achieve fault tolerance.
