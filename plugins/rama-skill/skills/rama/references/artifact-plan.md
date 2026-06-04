@@ -64,7 +64,7 @@ For each TaskGlobal, estimate:
 - Entry size in bytes: count every field stored per entry. Use primitives (long, int) instead of boxed objects (Long, Integer) where possible.
 - Entries per task: worst-case count
 - Total memory per task: entries × entry size
-- GC pressure: large object graphs with many small maps/vectors create GC overhead. Prefer flat structures, primitive arrays, or compact representations.
+- GC pressure: large object graphs with many small maps/vectors create GC overhead. Flat structures, primitive arrays, or compact representations MUST be used when possible since GC causes long pauses which degrade latency-sensitive operations like foreign reads.
 
 ### Minimization
 For each storage location, state whether the current design is minimal or whether data could be reduced:

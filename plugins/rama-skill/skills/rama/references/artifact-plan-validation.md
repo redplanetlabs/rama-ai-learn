@@ -40,6 +40,12 @@ Read `PLAN.md` first, then fill in each item below. Extract the relevant data fr
 ## Stream topology correctness
 - For each `depot-partition-append!` in a stream topology: is there a `(|direct (ops/current-task-id))` immediately before it to force a commit boundary? If no, FAIL. Do NOT reason about whether the receiving topology "will read the data later" — ALWAYS add the commit boundary. See `references/stream.md` "When PState writes commit."
 
+## In-memory state efficiency
+- For each TaskGlobal or in-memory cache, does the plan use compact, flat data structures (primitive arrays) instead of object-heavy structures (TreeMap, HashMap, vectors of maps)?
+- Object-heavy structures create per-entry heap overhead (object headers, pointers, boxed primitives) and produce large object graphs that increase GC pause times. On a latency-sensitive task thread, GC pauses cause latency spikes that propagate to all operations on that task — including unrelated reads and writes. The effect is non-local: one task's GC pause delays every client whose request routes to that task.
+- For each TaskGlobal: FAIL if the data can be partially or fully stored in a compact, flat data structure.
+- Does any TaskGlobal store data that could be fetched from a PState at query time without violating latency requirements? If so, FAIL.
+
 ## Spec coverage — trace every operation and constraint
 
 Enumerate every operation in the protocol/spec AND every constraint, prohibition, invariant, and edge case from the spec and `IMPLICIT_SPEC.md`. For each one, fill in a block below. Do NOT collapse multiple items into one block. Do NOT replace any block with a single-bullet "covered" claim — that bypasses the check.
