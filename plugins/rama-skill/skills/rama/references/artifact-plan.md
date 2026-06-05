@@ -22,14 +22,25 @@ If not obvious:
 ## Topologies and PStates
 <!-- Each topology owns zero or more PStates. Only the owning topology can write to a PState.
 A module can have multiple topologies of different types.
-Default is microbatch (exactly-once, cross-partition atomic).
-Use stream when: foreign-append! must block until PState changes are visible.
-If stream: can a partial failure + retry leave any writes permanently unexecuted or duplicated non-idempotently? If yes, fix the streaming logic or move that logic to a microbatch topology.
 
-- topology-name: microbatch | stream, because why
-  If stream: list each PState write and whether it is idempotent or non-idempotent.
+TOPOLOGY TYPE RULES:
+- Default is microbatch. Every topology is microbatch unless one of these forces stream:
+  (a) millisecond-level update latency — the caller needs PState changes visible immediately
+  (b) ack coordination — the caller needs to block or receive a return value via the depot append
+- A single user-facing operation often has multiple processing concerns with different latency
+  requirements. Separate them into different topologies — stream for the latency-sensitive part,
+  microbatch for everything else. Multiple topologies can consume the same depot independently, or the
+  stream topology can communicate to the microbatch topology with an internal depot.
+
+For each topology, list:
+- topology-name: microbatch | stream
+- Why this type: cite which stream reason applies, or state "default microbatch"
+- For each processing concern in the topology: does it actually require this topology type?
+  If any concern does not need the topology's stream/latency guarantees, it belongs in a
+  separate microbatch topology.
+- If stream: list each write and whether it is idempotent or non-idempotent.
     Non-idempotent writes in stream topologies will duplicate on retry.
-    Move non-idempotent writes to microbatch, make them idempotent, or explain how those writes are deduplicated.
+    Move non-idempotent writes to microbatch, make them idempotent, or explain the dedup mechanism.
   PStates:
     - $$name: full typed schema — no Object anywhere -->
 

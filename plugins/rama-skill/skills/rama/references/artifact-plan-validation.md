@@ -21,6 +21,7 @@ Read `PLAN.md` first, then fill in each item below. Extract the relevant data fr
 ## Topologies
 - Microbatch unless justified? <yes/no>
 - For each write operation that must be visible in single-digit milliseconds: is it handled by a stream topology? Microbatch has at least 300ms latency and cannot meet single-digit millisecond visibility requirements. <list each low-latency write and its topology — if any uses microbatch, FAIL>
+- For each stream topology: list every processing concern it handles. For each concern, does it actually require stream semantics (millisecond-level update latency or ack coordination with the appender)? If any concern does not require stream, FAIL — that concern belongs in a separate microbatch topology. Multiple topologies can consume the same depot independently or topologies can communicate with an internal depot.
 
 ## Production readiness
 - Does the plan work correctly with multiple concurrent clients? <yes/no — if no, FAIL>
@@ -33,6 +34,12 @@ Read `PLAN.md` first, then fill in each item below. Extract the relevant data fr
     - "Deduplicated by: <specific mechanism>"
   If a non-idempotent write has no resolution, FAIL.
 - For each stream topology that writes to multiple partitions: can a partial failure + retry leave any writes permanently unexecuted? <trace through failure at each partition hop — if yes, FAIL>
+
+## Internal depot usage
+- For each internal depot (`:disallow`): why can't the consuming topology just consume the original client-appended depot directly? An internal depot is only justified when:
+  (a) the consuming topology must wait for the sending topology to complete first (ordering dependency), or
+  (b) the internal depot carries data that is not available in any client-appended depot (e.g., computed/derived values)
+- If neither condition applies, FAIL — remove the internal depot and have the second topology consume the same client-appended depot independently.
 
 ## Cross-topology correctness
 - If data flows between topologies via internal depots: can the sending topology produce duplicate records (e.g., from stream retry)? If so, how does the receiving topology handle duplicates? <list each internal depot flow and dedup mechanism>
