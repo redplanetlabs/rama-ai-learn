@@ -10,6 +10,26 @@ Produce the full module: `defmodule` with depot/PState/topology declarations, ET
 
 ## Steps
 
+
+### Step 0 – Avoid unnecessary complexity
+
+These mistakes waste entire retry cycles. Read and internalize before writing any code:
+
+1. **No type hints on `defn` args.** Primitive type hints on function arguments hit Clojure compiler restrictions (max 4 primitive args, arity conflicts). The performance gain from primitive arg hints is irrelevant in virtually all Rama modules — the bottleneck is always disk I/O and network, never function call overhead. Put type hints on `let` bindings inside the body instead where they enable Java interop without compiler issues.
+   ```clojure
+   ;; WRONG
+   (defn my-fn [^HashMap m ^Long k] (.get m k))
+
+   ;; RIGHT
+   (defn my-fn [m k]
+     (let [^HashMap m m]
+       (.get m k)))
+   ```
+
+2. **No Clojure special forms in dataflow code.** Bodies of `deframafn`, `deframaop`, and `<<sources` blocks are Rama dataflow, not Clojure. Do NOT use `let`, `do`, `fn`, `#()`, `loop`, `if`, `when`, `cond`, or any other Clojure special form/macro. Use the Rama dataflow equivalents (`identity` for binding, `<<if` for branching, etc.). See `references/dataflow.md`.
+
+3. **Use plain `defn` for Java interop helpers, not `deframafn`.** If you need Java method calls, array manipulation, or imperative logic, write a plain `defn` and call it from dataflow.
+
 ### Step 1 — File skeleton
 
 Write the namespace, `defmodule`, and all declarations: depots, PStates, topology handles, task globals. No topology bodies yet — just the skeleton. Include a comment at the top reminding to re-read PLAN.md before modifying:
@@ -48,7 +68,7 @@ Read `references/dataflow.md` and `references/paths.md`. Read `references/troubl
 **Rama dataflow can express anything you can express in Clojure, just with different syntax.** Do NOT extract logic to plain `defn` helpers because you think dataflow is limited — use the dataflow equivalents instead. See `references/dataflow.md` for the details of how to express logic in dataflow.
 
 For each ETL topology:
-- Bind source: stream `(source> *depot :> *record)`, microbatch `(source> *depot :> %mb)` then `(%mb :> *record)`
+- Bind source: stream `(source> *depot :> *record)`, microbatch `(source> *depot :> %mb)`.
 - After sourcing, you are already on the partition determined by the depot's partitioner. Do NOT add a redundant partitioner call (e.g. `|hash`) if the depot is already partitioned by that key – it wastes time appending the continuation to a queue.
 - Use a partitioner only when you need to relocate computation a different way than the depot partitioner.
 - Write PState: prefer `+compound` with aggregators over `local-transform>` for accumulation patterns. Example:
