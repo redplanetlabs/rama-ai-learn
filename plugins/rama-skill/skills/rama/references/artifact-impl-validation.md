@@ -42,6 +42,9 @@ Review all topology, query topology, and foreign client code. For each check, st
 ## No reimplementation of built-in operations
 <!-- Scan the module source for any custom code that duplicates functionality already provided by Rama's built-in namespaces, such as com.rpl.rama.ops. Hand-rolled versions are FAIL. -->
 
+## Plan conformance
+<!-- Compare the implementation against PLAN.md. Any divergence from the plan is a FAIL unless the plan was wrong — meaning either a correctness issue (the plan's approach would produce incorrect behavior) or the plan's approach would have significantly worse performance than the implementation's approach. "Simpler," "functionally equivalent," "not a correctness issue," and "easier to implement" are not valid reasons to diverge. The plan was reviewed and validated; the implementation must follow it. List every divergence found and state PASS (matches plan) or FAIL (diverges without valid justification). -->
+
 ## Verdict
 
 Emit exactly one of `pass`, `minor-fail`, or `major-fail`, with a one-sentence justification.

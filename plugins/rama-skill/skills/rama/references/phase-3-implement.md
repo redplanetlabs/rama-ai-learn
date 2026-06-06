@@ -4,7 +4,7 @@ Produce the full module: `defmodule` with depot/PState/topology declarations, ET
 
 ## Inputs
 
-- `<impl-root>/PLAN.md` — the design. Adhere to every decision in it.
+- `<impl-root>/PLAN.md` — the design. No divergences from the plan are allowed unless the plan has a correctness issue or the plan's approach would have much worse performance. "Easier to implement" is NOT a valid reason to diverge.
 - The user-facing spec
 - This skill
 
