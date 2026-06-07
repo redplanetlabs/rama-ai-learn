@@ -100,12 +100,19 @@ cp <skill-root>/references/artifact-plan.md <impl-root>/PLAN.md
 
 Read `references/artifact-plan.md` for the template structure, then fill in `PLAN.md` with the design from Steps 1-4.
 
+### Step 6 — Self-validate before finishing
+
+Read `references/artifact-plan-validation.md` and go through every check against your plan. Fix any failures directly in `PLAN.md` before finishing this phase. Do NOT produce the `PLAN_VALIDATION.md` artifact — that is Phase 2's job. This step catches issues while the full design is in your context, avoiding expensive retry cycles through Phase 2 → Phase 1.
+
+Pay special attention to knock-on effects: when you change one part of the design (e.g., moving a concern to a different topology), re-trace every related operation and constraint to verify the change didn't break something elsewhere (e.g., recovery paths, self-inclusion, synchronization).
+
 ## Output
 
-`<impl-root>/PLAN.md`, fully filled in.
+`<impl-root>/PLAN.md`, fully filled in and self-validated.
 
 ## Do NOT
 
 - Do NOT write any topology, ETL, or query topology implementation code in this phase. Phase 1 is design only.
 - Do NOT skip any section of the plan template.
 - Do NOT commit to the first design that comes to mind for non-obvious decisions. State alternatives, estimate costs, pick.
+- Do NOT produce `PLAN_VALIDATION.md` in this phase. Self-validate against the checklist but do not write the artifact.

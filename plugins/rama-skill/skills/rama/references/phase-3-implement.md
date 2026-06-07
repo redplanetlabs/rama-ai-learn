@@ -147,12 +147,19 @@ Before finishing this phase:
 
 A compile or lint failure surfacing later costs a full retry of downstream phases, so close them out here.
 
+### Step 6 — Self-validate against implementation checklist
+
+Read `references/artifact-impl-validation.md` and go through every check against your module code. Fix any failures directly in the source before finishing this phase. Do NOT produce the `IMPLEMENTATION_VALIDATION.md` artifact — that is Phase 4's job.
+
+In particular, verify plan conformance: compare your implementation's data structures, topology types, and per-entry field choices against what `PLAN.md` specifies. Any divergence that is not justified by a correctness issue must be fixed now.
+
 ## Output
 
-The module source file (e.g. `<impl-root>/src/<name>/module.clj`), fully implemented: declarations + ETL topology bodies + query topology bodies + foreign client wrappers.
+The module source file (e.g. `<impl-root>/src/<name>/module.clj`), fully implemented and self-validated: declarations + ETL topology bodies + query topology bodies + foreign client wrappers.
 
 ## Do NOT
 
 - Do NOT deviate from `PLAN.md`. If the plan needs to change, the right move is to fail this phase, not to silently re-design while implementing.
 - Do NOT extract logic to plain `defn` helpers because you think dataflow is limited.
 - Do NOT add redundant partitioners that match the source partitioner.
+- Do NOT produce `IMPLEMENTATION_VALIDATION.md` in this phase. Self-validate against the checklist but do not write the artifact.
