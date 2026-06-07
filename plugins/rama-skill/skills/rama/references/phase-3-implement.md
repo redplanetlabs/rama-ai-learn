@@ -30,6 +30,9 @@ These mistakes waste entire retry cycles. Read and internalize before writing an
 
 3. **Use plain `defn` for Java interop helpers, not `deframafn`.** If you need Java method calls, array manipulation, or imperative logic, write a plain `defn` and call it from dataflow.
 
+4. **Do not think about testing in this phase.** This phase writes the module only. How modules are launched and how IPC is created is not relevant here.
+
+
 ### Step 1 — File skeleton
 
 Write the namespace, `defmodule`, and all declarations: depots, PStates, topology handles, task globals. No topology bodies yet — just the skeleton. Include a comment at the top reminding to re-read PLAN.md before modifying:

@@ -9,8 +9,7 @@ and some having millions.
 
 ## What you are given
 
-`fanout.social-graph/SocialGraphModule` (in `src/fanout/social_graph.clj`)
-is launched alongside your module by the test harness. Read the module source
+`fanout.social-graph/SocialGraphModule` (in `src/fanout/social_graph.clj`). Read the module source
 to determine how to use it. This module should be used for consuming the social
 graph from your module.
 
@@ -43,9 +42,7 @@ Your namespace must provide a `create-module` function returning:
  :wrap-client (fn [ipc] -> <Fanout implementation>)}
 ```
 
-- `:module` — your module. The test harness launches
-  `fanout.social-graph/SocialGraphModule` alongside it; do not include
-  it here.
+- `:module` — your module. Do not include `fanout.social-graph/SocialGraphModule` here.
 - `:wrap-client` — given a started IPC cluster, returns a reified
   `Fanout` implementation.
 
