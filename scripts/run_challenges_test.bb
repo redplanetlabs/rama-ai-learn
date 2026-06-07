@@ -375,10 +375,7 @@
       (babashka.fs/create-dirs challenges-dir)
       (doseq [name ["listed-challenge"
                     "unlisted-challenge"
-                    "unlisted-hard"
-                    "_hard-template"
-                    "cluster-template"
-                    "cluster-shared"]]
+                    "unlisted-hard"]]
         (let [dir (babashka.fs/path challenges-dir name)]
           (babashka.fs/create-dirs dir)
           (spit (str (babashka.fs/path dir "README.md")) (str "# " name "\n"))))

@@ -478,12 +478,12 @@
   "Outer timeout for a single subprocess invocation (seconds).
   Phase invocations bind this to min(default, time-remaining-in-overall-budget)
   so a single phase can't exceed either the per-call cap or the run-wide cap."
-  (* 2 3600))
+  (* 3 3600))
 
 (def ^:dynamic *overall-timeout-s*
   "Hard cap on total wall-clock for one challenge run (seconds).
   Includes all phase invocations, retries, lint, and test runs."
-  (* 4 3600))
+  (* 6 3600))
 
 (defn time-remaining-s
   "Seconds left in the overall challenge run budget. Never negative."
@@ -1103,15 +1103,18 @@
            :failure-reason (format "Phase %d (attempt %d) exited %d." phase-id attempt (:exit r))
            :transcript-path (:transcript-path r)}
 
-          ;; Phase 2: binary verdict.
+          ;; Phase 2: three-way verdict.
+          ;; pass       → phase 3
+          ;; minor-fail → phase 3 (validator fixes plan directly, no re-validation)
+          ;; major-fail → phase 1 (architecture needs rethinking)
           (= phase-id 2)
           (cond
-            (= :pass (:verdict r))
+            (or (= :pass (:verdict r)) (= :minor-fail (:verdict r)))
             (recur 3 attempts' skip-flags
                    (assoc validation-fail-counts 2 0)
                    results')
 
-            (= :fail (:verdict r))
+            (= :major-fail (:verdict r))
             (let [prior-fails (get validation-fail-counts 2 0)
                   vfc' (assoc validation-fail-counts 2 (inc prior-fails))]
               (if (< prior-fails validation-retry-cap)

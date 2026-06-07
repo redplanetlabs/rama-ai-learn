@@ -34,18 +34,21 @@ Adversarially validate `PLAN.md` against the spec. Produce `PLAN_VALIDATION.md` 
 
 ## Verdict
 
-Emit either `PHASE_VALIDATION:pass` or `PHASE_VALIDATION:fail` as the last non-empty line of your output. Default to FAIL.
+Emit one of `PHASE_VALIDATION:pass`, `PHASE_VALIDATION:minor-fail`, or `PHASE_VALIDATION:major-fail` as the last non-empty line of your output. Default to major-fail.
 
-If any check is FAIL: report FAIL, with each failure explicitly listing the spec line, the plan line, and why the plan does not satisfy the spec. The retry phase will read this artifact and revise the plan.
+- **pass** — every check passes after honest scenario-tracing.
+- **minor-fail** — failures are fixable by specific, localized edits to `PLAN.md`. You can see exactly what lines to change. After emitting the verdict, fix the plan directly: edit `PLAN.md` to address every FAIL item yourself. Then proceed.
+- **major-fail** — at least one failure requires rethinking the architecture. Return to Phase 1 for redesign.
 
-If every check passes after honest scenario-tracing: report PASS.
+When unsure between minor and major, choose **major-fail**.
 
 ## Orchestration routing
 
-This is a binary verdict phase. The orchestrator uses the verdict to decide what happens next:
+This is a three-way verdict phase. The orchestrator uses the verdict to decide what happens next:
 
 - **pass** → proceed to Phase 3 (implement).
-- **fail** → return to Phase 1 (plan) for revision. The plan author reads `PLAN_VALIDATION.md` and addresses every FAIL item. Up to 3 retry iterations; if the cap is hit, the orchestrator proceeds to Phase 3 with the best plan so far.
+- **minor-fail** → the validator fixes `PLAN.md` directly and proceeds to Phase 3. No return to Phase 1, no re-validation.
+- **major-fail** → return to Phase 1 (plan) for revision. The plan author reads `PLAN_VALIDATION.md` and addresses every FAIL item. Up to 3 retry iterations; if the cap is hit, the orchestrator proceeds to Phase 3 with the best plan so far.
 
 ## Do NOT
 
