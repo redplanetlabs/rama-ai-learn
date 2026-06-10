@@ -109,7 +109,7 @@ Use range navigators for efficient disk-level iteration (single
 disk seek per range):
 
 ```clojure
-(sorted-map-range :a :z)                          ;; inclusive both ends
+(sorted-map-range :a :z)                          ;; start inclusive, end exclusive
 (sorted-map-range :a :z {:inclusive-start? false}) ;; exclusive start
 (sorted-map-range-from :k 10)                     ;; from key, first N entries scanning forward
 (sorted-map-range-to :k 10)                       ;; up to key (exclusive), last N entries scanning backward
