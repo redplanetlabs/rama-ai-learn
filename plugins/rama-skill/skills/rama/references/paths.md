@@ -466,11 +466,18 @@ Navigate to subranges of sorted maps. On subindexed PState maps: single disk see
 
 **`(sorted-map-range-from start)`** — from start key (inclusive) to end of map.
 
-**`(sorted-map-range-from start opts)`** — with options `{:max-amt n :inclusive? bool}`.
+**`(sorted-map-range-from start opts)`** — with options `{:max-amt n :inclusive? bool}`. `:max-amt` scans **forward** from `start`: returns the first `n` entries at/after `start`, ascending.
 
 **`(sorted-map-range-to end)`** — from beginning of map to end key (exclusive).
 
-**`(sorted-map-range-to end opts)`** — with options `{:max-amt n :inclusive? bool}`.
+**`(sorted-map-range-to end opts)`** — with options `{:max-amt n :inclusive? bool}`. `:max-amt` scans **backward** from `end` (exclusive by default; `:inclusive? true` includes it): returns the `n` entries closest to `end` — the *last* `n` entries of the range, not the first `n` of the map. This makes it the tail-read navigator: use it to read the `n` entries nearest a cursor key without iterating the whole range.
+
+```clojure
+(select-one (sorted-map-range-from 2 {:max-amt 2}) (sorted-map 1 :a 2 :b 3 :c 5 :e 7 :g))
+;; => {2 :b 3 :c}    ;; first 2 entries from 2, scanning forward
+(select-one (sorted-map-range-to 7 {:max-amt 2}) (sorted-map 1 :a 2 :b 3 :c 5 :e 7 :g))
+;; => {3 :c 5 :e}    ;; last 2 entries before 7 (end exclusive), scanning backward
+```
 
 **`(sorted-map-range-from-start max-amt)`** — first `max-amt` entries from beginning of map.
 
@@ -486,11 +493,11 @@ Same semantics as sorted map navigators, applied to sorted sets. On subindexed P
 
 **`(sorted-set-range-from start)`** — from start element (inclusive) onward.
 
-**`(sorted-set-range-from start opts)`** — with options `{:max-amt n :inclusive? bool}`.
+**`(sorted-set-range-from start opts)`** — with options `{:max-amt n :inclusive? bool}`. `:max-amt` scans **forward** from `start` (first `n` elements at/after `start`).
 
 **`(sorted-set-range-to end)`** — up to end element (exclusive).
 
-**`(sorted-set-range-to end opts)`** — with options `{:max-amt n :inclusive? bool}`.
+**`(sorted-set-range-to end opts)`** — with options `{:max-amt n :inclusive? bool}`. `:max-amt` scans **backward** from `end` (last `n` elements before `end`).
 
 **`(sorted-set-range-from-start max-amt)`** — first `max-amt` elements.
 

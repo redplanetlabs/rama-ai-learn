@@ -44,6 +44,7 @@ Vectors and sets cannot be top-level. Use `java.util.ArrayList` or
 - O(1) point lookups into arbitrarily large nested structures
 - Subindexed maps and sets are sorted — efficient range queries
   - Sorting is lexicographic based on the serialized form of the key
+  - UUID7 keys sort in time order (see unique-ids.md)
 - O(1) size queries (when size tracking is on)
 
 **Critical constraint:** A subindexed structure is NOT a plain value — it is a handle to RocksDB storage. It can be used like a plain data structure, but it cannot be transferred over network boundaries. Queries must always navigate INTO it using element/range navigators (`ALL`, `MAP-VALS`, `MAP-KEYS`, `sorted-map-range`, `sorted-set-range-from-start`, etc.) to access individual elements, which are plain serializable values.
@@ -110,8 +111,8 @@ disk seek per range):
 ```clojure
 (sorted-map-range :a :z)                          ;; inclusive both ends
 (sorted-map-range :a :z {:inclusive-start? false}) ;; exclusive start
-(sorted-map-range-from :k 10)                     ;; from key, up to N elements
-(sorted-map-range-to :k 10)                       ;; up to key, N elements in reverse
+(sorted-map-range-from :k 10)                     ;; from key, first N entries scanning forward
+(sorted-map-range-to :k 10)                       ;; up to key (exclusive), last N entries scanning backward
 ;; Set variants: sorted-set-range, sorted-set-range-from, sorted-set-range-to
 ```
 

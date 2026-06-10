@@ -85,6 +85,7 @@ For each ETL topology:
   Use `local-transform>` only when you need path control that aggregators don't support (e.g., conditional navigation, `NONE>` deletion).
 - Read PState (colocated): `(local-select> [path] $$pstate :> *val)`
 - For multi-entity updates that span partitions, use partitioner hops within the topology
+- If the module uses tick depots, declare them behind the replaceable-flag conditional shown in `references/testing.md` ("Testing Tick Depots") from the start. An unconditional `declare-tick-depot` makes tick timing untestable and silently breaks any test that relies on the substitution flag.
 
 ### Step 3 — Implement query topologies
 

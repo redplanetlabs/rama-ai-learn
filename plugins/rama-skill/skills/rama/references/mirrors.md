@@ -46,20 +46,29 @@ Declaration scope:
 
 ### Partition routing
 
+Every partition of a mirror object maps to exactly **one task of the referencing module**. If the source has more partitions than the referencing module has tasks, one local task hosts multiple mirror partitions; if it has fewer, some local tasks host none.
+
+Mirror partitioners (`|hash$$`, `|direct$$`, `|all$$`, …) therefore move computation to a task of **the current module** — the one hosting the target mirror partition — and additionally record *which source partition* subsequent `local-select>` calls on that mirror address. `(|direct$$ $$mirror p)` takes a **source-module partition id** `p` and routes to the local task hosting it.
+
 ```text
 N_M = task-count(M)              -- tasks in referencing module
 N_s = partition-count(s, entity) -- partitions in source module for entity
 
-route_mirror : Partitioner × Value × Mirror → TaskId_s
-route_mirror(|hash$$ $$m, k) = home_s($$m, k)    -- routes to source partition space
-                              = hash(k) mod N_s
+-- Every mirror partition is hosted by exactly one task of M.
+host_M : Partition_s → TaskId_M
 
-all_mirror : Mirror → Set TaskId_s
-all_mirror(|all$$ $$m) = {0..N_s - 1}
+route_mirror : Partitioner × Value × Mirror → TaskId_M × Partition_s
+route_mirror(|hash$$ $$m, k)   = (host_M(p), p)  where p = hash(k) mod N_s
+route_mirror(|direct$$ $$m, p) = (host_M(p), p)  -- p is a SOURCE partition id
 
--- When N_M ≠ N_s, each task t ∈ M maps to
--- {p ∈ 0..N_s-1 | assigned(t, p)} partitions in s (zero or more)
+all_mirror(|all$$ $$m) = {(host_M(p), p) | p ∈ 0..N_s-1}
+-- one emit per SOURCE partition: when N_s > N_M some local tasks
+-- are visited multiple times, once per hosted mirror partition
 ```
+
+Consequences:
+- Dataflow after a mirror partitioner runs on the current module's tasks; regular partitioners (`|hash`, `|direct`, …) may follow normally.
+- A mirror partitioner sets the source partition that the next `local-select>` on that mirror reads from.
 
 ### Mirror immutability law
 
@@ -67,12 +76,12 @@ Mirror bindings permit `{ReadExt, Append, Invoke}` only — never `Write`.
 
 ### Suspension
 
-Mirror operations are async boundaries. `local-select>` on a mirror suspends the current continuation and resumes on callback from the source module.
+Mirror operations are async boundaries. `local-select>` on a mirror suspends the current continuation; the read is served by the source module, and the continuation **resumes on the same local task** when the result arrives.
 
 ```text
-Source                   Target              Effect
-─────────────────────────────────────────────────────────
-Mirror PState read       source module task  ReadExt, Suspend
+Operation             Served by        Continuation resumes on   Effect
+────────────────────────────────────────────────────────────────────────
+Mirror PState read    source module    same local task           ReadExt, Suspend
 ```
 
 ## Declaration syntax
@@ -97,7 +106,7 @@ Each has a `*` variant (e.g. `mirror-depot*`) for programmatic var specification
 
 ## Mirror partitioners
 
-Mirror partitioners route to the source module's partition space (not the current module's tasks).
+Mirror partitioners route by the source module's partition space: they compute the target partition among the source's partitions, then move computation to the **local task hosting that mirror partition** (see "Partition routing" above).
 
 ```ebnf
 mirror-hash   = '(|hash$$' pstate-var var ')' ;

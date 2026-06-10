@@ -24,8 +24,7 @@
      and self timelines may complete asynchronously after that and take up to a second.")
   (get-user-timeline [this account-id]
     "Return every post account-id has ever made as a vector of content
-     strings, in chronological order (oldest first). Must complete within
-     5 milliseconds.")
+     strings, in chronological order (oldest first).")
   (get-timeline-page [this user-id from-post-id]
     "Return up to 20 most recent timeline entries for user-id, most recent
      first, posted before from-post-id (or all if from-post-id is nil). Each

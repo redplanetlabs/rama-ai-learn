@@ -20,6 +20,8 @@ TaskGlobalWithTick extends TaskGlobal :
 
 TaskGlobals are accessible from any topology within the owning module. They are not accessible cross-module (no mirror equivalent).
 
+TaskGlobals can be **mutated** from any topology type — stream, microbatch, and query topologies alike. The "read-only" restriction on query topologies applies to PStates, not task globals. Tasks are single-threaded, so mutation is safe without locking wherever it happens.
+
 ## Declaration
 
 ```clojure

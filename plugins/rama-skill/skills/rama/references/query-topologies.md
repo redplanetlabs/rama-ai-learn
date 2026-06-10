@@ -142,7 +142,9 @@ Every query topology has an implicit unreplicated in-memory PState `$$<topology-
 
 ## Constraints
 
-- Read-only: no `local-transform>` on user PStates (only the implicit temp PState)
+- Read-only applies to PStates only: no `local-transform>` on user PStates (the implicit temp PState is writable). The restriction does NOT extend to other effects:
+  - Depot appends ARE allowed from query topologies (`depot-partition-append!`).
+  - Task global mutation IS allowed from query topologies — task globals can be mutated from anywhere; tasks are single-threaded, so the usual task-global safety rules apply unchanged.
 - Must end with `|origin` as the final pre-agg partitioner
 - Output variable must be emitted exactly once
 - No partitioners in post-agg
