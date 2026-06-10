@@ -270,10 +270,16 @@ python3 scripts/analyze-latest-transcript.py <command> [args...]
 bash scripts/docker-copy-transcript.sh
 ```
 
+**ALWAYS heavily prefer `scripts/analyze-latest-transcript.py` for ANY
+transcript inspection.** Do NOT use `grep`, `jq`, `cat`, `head`, `sed`,
+inline `python3 -c`, or the Read/Grep tools on `.jsonl` transcript
+files — those commands are not allowlisted and force the user to
+approve permission prompts constantly. The analyze script invoked in
+its canonical form is pre-approved and prompts for nothing.
+
 If the analyze script doesn't have a command for what you need, **add
-one to the script** rather than working around it with `grep` /
-`jq` / inline `python3 -c`. The script is the supported interface
-for transcript analysis.
+one to the script** rather than working around it with other tools.
+The script is the supported interface for transcript analysis.
 
 ### Verification
 
