@@ -21,6 +21,5 @@
       }
     }
   },
-  "autoMemoryEnabled": false,
-  "showThinkingSummaries": true
+  "autoMemoryEnabled": false
 }

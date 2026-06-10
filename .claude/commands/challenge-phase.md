@@ -38,6 +38,37 @@ Any specification in the README or protocol is non-negotiable.
   - Do NOT use `rama-challenges.harness` in tests — not in requires, imports, or fully-qualified calls.
   - If the module uses tick depots, use `rama-challenges.shared/REPLACE-TICK-DEPOTS` (already on classpath). Read its docstring for usage.
 
+## Reasoning log (every phase)
+
+`implementations/<challenge_name>/REASONING.md` is an append-only reasoning
+log. The runner has already appended a sentinel line for this phase
+(`=== PHASE <N> attempt <K> — <timestamp> ===`); your entries go below it.
+
+As you work, append your reasoning AT EACH DECISION POINT — the alternatives
+you weighed, why you rejected them, and which constraint drove the choice.
+Write entries as you decide, not as a summary at the end; a retrospective
+summary loses the dead ends, and the dead ends are the point.
+
+ALWAYS log anything you are confused or uncertain about, AT THE MOMENT of
+confusion: an API whose behavior you can't predict, documentation that seems
+ambiguous or contradictory, an error you don't understand, a constraint you
+aren't sure how to satisfy. Log it even if — especially if — you resolve the
+confusion moments later, and note what resolved it. Confusion entries are the
+single most valuable content in this file: they identify exactly where the
+skill documentation failed you. Mark them with a `CONFUSION:` prefix.
+
+- Append with:
+  ```
+  cat >> implementations/<challenge_name>/REASONING.md <<'EOF'
+  ...your reasoning...
+  EOF
+  ```
+- Do NOT rewrite REASONING.md, do NOT edit or delete prior entries, and do
+  NOT remove sentinel lines. The file is append-only.
+- This phase is NOT complete until REASONING.md has at least one entry for
+  this phase. Validation phases (2, 4, 6, 7): record the reasoning behind
+  your verdict before emitting it.
+
 ## Phase dispatch
 
 Read the per-phase doc for `<phase_id>` and follow it. Do not read other phase docs.

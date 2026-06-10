@@ -973,12 +973,27 @@
   [project-root challenge-name]
   (invoke-command! ["bash" "scripts/save-attempt.sh" challenge-name] project-root))
 
+(defn append-reasoning-sentinel!
+  "Append a phase sentinel to the challenge's REASONING.md. Each phase
+  invocation is instructed to append its reasoning below the sentinel, so
+  entries can be attributed to the phase/attempt that wrote them."
+  [project-root challenge-name phase-id attempt]
+  (let [impl-dir (fs/path project-root "implementations" challenge-name)
+        path     (fs/path impl-dir "REASONING.md")
+        ts       (.format (java.time.LocalDateTime/now)
+                          (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm:ss"))]
+    (fs/create-dirs impl-dir)
+    (spit (str path)
+          (format "\n=== PHASE %d attempt %d — %s ===\n\n" phase-id attempt ts)
+          :append true)))
+
 (defn run-phase!
   "Invoke one phase of a challenge. Clamps the per-call timeout to whatever's
   left in the overall run budget. Returns a result map with everything the
   caller needs to decide next steps and accumulate per-phase telemetry."
   [agent-fns challenge-name phase-id attempt
    project-root agent-name model reasoning run-start-time run-start-millis]
+  (append-reasoning-sentinel! project-root challenge-name phase-id attempt)
   (let [cmd ((:phase-cmd agent-fns) challenge-name phase-id project-root model reasoning)
         remaining (long (time-remaining-s run-start-millis))
         effective-timeout (min *outer-timeout-s* remaining)

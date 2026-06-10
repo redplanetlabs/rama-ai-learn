@@ -23,6 +23,9 @@ Commands:
   test-validation      - Show TEST_VALIDATION.md content
   errors               - Show all compilation/test errors
   thinking <query>     - Search thinking blocks for a keyword/phrase
+  thinking-blocks      - Show raw structure of every thinking block
+  reasoning            - Show REASONING.md appends made during the transcript
+  confusions           - Show only CONFUSION entries from REASONING.md appends
   writes <query>       - Search Write tool calls for a keyword
   edits <query>        - Search Edit tool calls for a keyword
   module               - Show the final module.clj content (replays Write + Edits)
@@ -265,6 +268,72 @@ def cmd_thinking(lines, args):
                     print(f"=== LINE {i} at {idx}/{len(text)} ===")
                     print(text[start:end])
                     print()
+
+def _reasoning_appends(lines):
+    """Yield (line_index, label, text) for every REASONING.md append in the
+    transcript: Bash heredoc/echo appends plus Write/Edit tool calls."""
+    for i, line in enumerate(lines):
+        msg = line.get('message', {})
+        for block in msg.get('content', []):
+            if block.get('type') != 'tool_use':
+                continue
+            name = block.get('name')
+            inp = block.get('input', {})
+            if name == 'Bash':
+                cmd = inp.get('command', '')
+                if 'REASONING.md' not in cmd:
+                    continue
+                m = re.search(r"<<\s*'?(\w+)'?\n(.*?)\n\1", cmd, re.DOTALL)
+                yield (i, 'Bash', m.group(2) if m else cmd)
+            elif name in ('Write', 'Edit'):
+                fp = inp.get('file_path', '')
+                if 'REASONING.md' not in fp:
+                    continue
+                content = inp.get('content') or inp.get('new_string', '')
+                yield (i, f"{name} {fp}", content)
+
+def cmd_reasoning(lines, args):
+    """Show REASONING.md appends made during this transcript. Phase sentinels
+    are written by the runner (not the agent), so attribute entries to phases
+    by running this per-phase via --phase N."""
+    found = False
+    for i, label, text in _reasoning_appends(lines):
+        found = True
+        print(f"=== LINE {i} ({label}) ===")
+        print(text)
+        print()
+    if not found:
+        print("(no REASONING.md activity in this transcript)")
+
+def cmd_confusions(lines, args):
+    """Show only REASONING.md appends containing CONFUSION entries — the
+    places where the agent reported being confused or uncertain."""
+    found = False
+    for i, label, text in _reasoning_appends(lines):
+        if 'CONFUSION' not in text:
+            continue
+        found = True
+        print(f"=== LINE {i} ({label}) ===")
+        print(text)
+        print()
+    if not found:
+        print("(no CONFUSION entries in this transcript)")
+
+def cmd_thinking_blocks(lines, args):
+    """Show raw structure of every thinking block: keys and a content preview
+    for each field, so empty/summarized thinking can be diagnosed."""
+    for i, line in enumerate(lines):
+        msg = line.get('message', {})
+        for block in msg.get('content', []):
+            if block.get('type') != 'thinking':
+                continue
+            print(f"=== LINE {i} keys={sorted(block.keys())} ===")
+            for k, v in block.items():
+                if k == 'type':
+                    continue
+                s = v if isinstance(v, str) else json.dumps(v)
+                print(f"  {k}: ({len(s)} chars) {s[:300]}")
+            print()
 
 def cmd_writes(lines, args):
     query = ' '.join(args) if args else ''
@@ -549,6 +618,9 @@ COMMANDS = {
     'test-validation': cmd_test_validation,
     'errors': cmd_errors,
     'thinking': cmd_thinking,
+    'thinking-blocks': cmd_thinking_blocks,
+    'reasoning': cmd_reasoning,
+    'confusions': cmd_confusions,
     'writes': cmd_writes,
     'edits': cmd_edits,
     'module': cmd_module,
