@@ -3,4 +3,4 @@
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
-docker build -t rama-challenges .
+docker build --build-arg CACHEBUST="$(date +%s)" -t rama-challenges .

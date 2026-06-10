@@ -1752,4 +1752,5 @@
           results)))))
 
 (when (= *file* (System/getProperty "babashka.file"))
-  (-main *command-line-args*))
+  (-main *command-line-args*)
+  (shell "bash" "-c" "for i in $(seq 10); do printf '\\a'; sleep 0.3; done"))
