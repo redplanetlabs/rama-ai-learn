@@ -85,7 +85,7 @@ PState key and value schemas are strict about numeric types: a `Long` schema rej
 
 ### "Object cache disallowed {:class ...}"
 
-A constant of an unsupported type is embedded in dataflow code. Constants embedded in dataflow must be Java primitives (numbers, booleans, chars, strings, etc.) or Clojure's immutable data structures (vectors, maps, sets, lists) containing such values. Any other object type fails at module launch with this error.
+A constant of an unsupported type is embedded in dataflow code. Constants embedded in dataflow must be Java primitives (numbers, booleans, chars, strings, etc.) or Clojure's immutable data structures (vectors, maps, sets, lists) containing such values. Java arrays (e.g. `long-array`, `object-array`) and any other object type fail at module launch with this error. The same rules apply to `declare-object` values (see task-globals.md).
 
 Work around by calling a Clojure function that returns the constant:
 

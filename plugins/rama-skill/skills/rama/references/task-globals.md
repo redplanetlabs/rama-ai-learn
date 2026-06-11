@@ -24,6 +24,8 @@ TaskGlobals can be **mutated** from any topology type — stream, microbatch, an
 
 ## Declaration
 
+`declare-object` values follow the same rules as constants embedded in dataflow code (see dataflow.md). Invalid values fail at module launch with `Object cache disallowed {:class ...}`.
+
 ```clojure
 ;; Plain value (no lifecycle)
 (declare-object setup *my-val 42)

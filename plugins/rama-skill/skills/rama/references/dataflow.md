@@ -234,7 +234,10 @@ atomic-block    = '(<<atomic' { dataflow-stmt } ')' ;
 each-block      = '(<<each' { dataflow-stmt } ')' ;
 branch-block    = '(<<branch' anchor { dataflow-stmt } ')' ;
 
-loop-block      = '(loop<-' '[' { var init-expr } ':>' { var } ']' { dataflow-stmt } ')' ;
+loop-block      = '(loop<-' '[' { var init-expr } ':>' { var } ']' { loop-stmt } ')' ;
+loop-stmt       = dataflow-stmt | partitioner ;
+                (* Loop bodies can go async: partitioners, mirror local-select>,
+                   completable-future>, and other suspending operations are legal. *)
 continue-stmt   = '(continue>' { expr } ')' ;
 recur-stmt      = '(recur>' { expr } ')' ;
 self-call       = '(%self' { expr } [ output-bind ] ')' ;
@@ -316,7 +319,7 @@ inline-hook     = '(' callable { arg } ':>>' { dataflow-stmt } ')' ;
 - Prefer `term` to read-modify-write.
 - Clojure macros (`->`, `->>`, etc.) expand before Rama compilation and are valid in dataflow code.
 - Nested expressions can capture single `:>` emits: `(* (- 10 4) (+ 1 2) :> *res)`.
-- Constants embedded in dataflow code must be Java primitives (numbers, booleans, chars, strings, etc.) or Clojure's immutable data structures (vectors, maps, sets, lists) containing such values. Other object types cannot be embedded and fail at module launch with `Object cache disallowed {:class ...}`. Work around by calling a Clojure function that returns the constant.
+- Constants embedded in dataflow code must be Java primitives (numbers, booleans, chars, strings, etc.) or Clojure's immutable data structures (vectors, maps, sets, lists) containing such values. Java arrays (e.g. `long-array`, `object-array`) and other object types cannot be embedded and fail at module launch with `Object cache disallowed {:class ...}`. Work around by calling a Clojure function that returns the constant.
 
 ## Control flow construct descriptions
 
@@ -345,6 +348,7 @@ inline-hook     = '(' callable { arg } ':>>' { dataflow-stmt } ')' ;
 
 ## Loop and branching patterns
 
+- `loop<-` bodies can go **async**: partitioners, `local-select>` on mirror PStates, `completable-future>`, and other suspending operations are legal inside the body (when the surrounding context permits them). The iteration suspends at the async boundary and resumes; `continue>` then proceeds normally.
 - `loop<-` termination: the `(else>)` branch must emit via `(:> *acc)` to produce loop output (§5.11). Missing emit → `*out` is `nil`.
 - Bounded iteration pattern:
 ```clojure
