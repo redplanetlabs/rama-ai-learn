@@ -193,6 +193,11 @@ share the same module name:
 Existing depot and PState clients automatically redirect to the
 updated module instance.
 
+`update-module!` also accepts an **unchanged** module value. This is
+useful for simulating a worker restart in tests: task globals are
+recreated (`prepareForTask` runs again) and all in-memory state is
+lost, while PStates and depots persist.
+
 ### Removing PStates or Depots on Update
 
 When the new version removes PStates or depots, specify them

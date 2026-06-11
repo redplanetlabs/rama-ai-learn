@@ -23,6 +23,8 @@ For every operation the system exposes, fill in:
 
 Ground these in the specific domain — don't list generic concerns. Every point must be tied to a concrete operation or behavior.
 
+**The spec records requirements, not designs.** Do NOT prescribe implementation decisions — state representations, storage choices, data structures, or mechanisms. Anything written here is treated as a requirement by every later phase and becomes exempt from validation checks it would otherwise fail. State WHAT must be true (latency bounds, invariants, scale facts); leave HOW to the plan.
+
 ## Operations
 
 <!-- Fill in for each operation -->

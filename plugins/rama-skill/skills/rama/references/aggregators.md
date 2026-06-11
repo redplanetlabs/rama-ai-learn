@@ -5,6 +5,13 @@ explicit null handling. Within `+compound`, missing nested keys are
 auto-initialized. Top-level PState aggregators (outside `+compound`)
 require the PState value to already exist.
 
+In batch blocks and query topologies, aggregators always fire and bind
+their output even when zero rows reach them: the output is the
+aggregator's zero value (`0` for `+sum`, `[]` for `+vec-agg`, `#{}` for
+`+set-agg`, `nil` for `+last`, etc.). Do NOT add special-case branches
+for "empty input" — the zero value flows through normally. See batch.md
+"Zero rows — aggregators still fire".
+
 ## Formalism
 
 Universe

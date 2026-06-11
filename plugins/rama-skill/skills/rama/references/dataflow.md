@@ -232,7 +232,7 @@ switch-case     = '(case>' value ')' { dataflow-stmt } ;
 do-block        = '(<<do' { dataflow-stmt } ')' ;
 atomic-block    = '(<<atomic' { dataflow-stmt } ')' ;
 each-block      = '(<<each' { dataflow-stmt } ')' ;
-branch-block    = '(<<branch' { dataflow-stmt } ')' ;
+branch-block    = '(<<branch' anchor { dataflow-stmt } ')' ;
 
 loop-block      = '(loop<-' '[' { var init-expr } ':>' { var } ']' { dataflow-stmt } ')' ;
 continue-stmt   = '(continue>' { expr } ')' ;
@@ -269,7 +269,7 @@ named-stream-bind = ':' label '>' anchor-var var { var } ;
 | Do block | `(<<do ...)` |
 | Atomic block | `(<<atomic ...)` |
 | Each (per-element iteration) | `(<<each ...)` |
-| Branch (parallel) | `(<<branch ...)` |
+| Branch off an anchor | `(<<branch <root> ...)` |
 | Loop | `(loop<- [*i 0 :> *out] ... (continue> (inc *i)))` |
 | Recur (ramafn tail-call) | `(recur> *new-args)` |
 | Self-invocation (recursion) | `(%self *arg1 *arg2 :> *result)` |
@@ -316,13 +316,28 @@ inline-hook     = '(' callable { arg } ':>>' { dataflow-stmt } ')' ;
 - Prefer `term` to read-modify-write.
 - Clojure macros (`->`, `->>`, etc.) expand before Rama compilation and are valid in dataflow code.
 - Nested expressions can capture single `:>` emits: `(* (- 10 4) (+ 1 2) :> *res)`.
-- Constants in dataflow must be serializable (basic types, records, functions, `RamaSerializable`).
+- Constants embedded in dataflow code must be Java primitives (numbers, booleans, chars, strings, etc.) or Clojure's immutable data structures (vectors, maps, sets, lists) containing such values. Other object types cannot be embedded and fail at module launch with `Object cache disallowed {:class ...}`. Work around by calling a Clojure function that returns the constant.
 
 ## Control flow construct descriptions
 
 - `<<atomic`: waits for all synchronous work in its block before continuing; async boundaries (partitioners) do not block.
 - `<<shadowif`: conditionally shadows a variable's value — `(<<shadowif *v pred new-val)` replaces `*v` with `new-val` if `(pred *v)` is true, otherwise `*v` is unchanged.
-- `<<branch`: parallel execution branches; containing code continues after all branches complete.
+- `<<branch`: attaches its body as a branch off the given anchor — sugar for the `anchor>`/`hook>` pattern with the branch body indented as a subblock. Code after the `<<branch` attaches to the code *before* it, not to the branch body. Requires the anchor argument. These are equivalent:
+```clojure
+;; anchor>/hook>
+(identity 1 :> *a)
+(anchor> <root>)
+(println "Result 1:" (dec *a))
+(hook> <root>)
+(println "Result 2:" *a)
+
+;; <<branch
+(identity 1 :> *a)
+(anchor> <root>)
+(<<branch <root>
+  (println "Result 1:" (dec *a)))
+(println "Result 2:" *a)
+```
 - `<<with-substitutions`: replaces var references during dataflow compilation. Idiomatic way to access module-scoped PStates in `deframafn`/`deframaop` bodies — prevents accidentally transferring a PState partition reference across a partitioner boundary. PStates can also be passed as parameters, which is fine as long as no partitioner in the body causes the PState var to be accessed on a different task.
 - `?<-`: compiles and runs a dataflow block. `:clj>` output stream returns values to Clojure. Test and repl only.
 - `continue>`: loop iteration. `recur>`: tail-call recursion within `ramafn` bodies (no ramaop invokes between start and callsite).

@@ -71,6 +71,25 @@ Navigate INTO the subindexed structure instead. Use `ALL`, `MAP-VALS`, `MAP-KEYS
 
 This applies everywhere subindexed values cross a serialization boundary: direct PState queries, query topology results, partitioner hops, mirror reads, and `select>` (which has an implicit partitioner).
 
+### "Object cache disallowed {:class ...}"
+
+A constant of an unsupported type is embedded in dataflow code. Constants embedded in dataflow must be Java primitives (numbers, booleans, chars, strings, etc.) or Clojure's immutable data structures (vectors, maps, sets, lists) containing such values. Any other object type fails at module launch with this error.
+
+Work around by calling a Clojure function that returns the constant:
+
+```clojure
+(def SOME-CONSTANT (SomeObject.))
+
+;; WRONG — non-primitive constant embedded in dataflow
+(some-operation SOME-CONSTANT :> *result)
+
+;; RIGHT — a Clojure fn call produces the value at runtime
+(defn some-constant [] SOME-CONSTANT)
+...
+(some-constant :> *obj)
+(some-operation *obj :> *result)
+```
+
 ## Module declaration errors
 
 ### "Unable to resolve classname: MyModule"

@@ -25,6 +25,10 @@ You do NOT have to emit from the fragment var immediately or only once. If you n
 
 Microbatches process sequentially, and the next one does not start until all data in the current microbatch finishes processing and committing all changes to PStates. So a record that is appended to a depot immediately after a microbatch starts will not have its changes visible until two microbatches have run and finished.
 
+### Behavior when subscribed depots are empty
+
+When a microbatch topology's subscribed depots have no new data, the next microbatch is **delayed** — the topology enters lightweight polling mode waiting for new data, sleeping up to **one minute by default** between empty checks (`topology.microbatch.empty.sleep.time.millis`). Any pending background work scheduled inside the topology stalls for that delay. If background work must run on a faster cadence regardless of incoming data, subscribe the topology to a tick depot (see "Tick depots for timely background work" below).
+
 ### `<<batch` blocks
 
 `<<batch` is the microbatch equivalent of a barrier — it does NOT continue past the `<<batch` until the entire batch block has completed across ALL tasks. This makes it the right tool for multi-step processing within a single microbatch where later steps depend on earlier steps being globally complete.
@@ -103,7 +107,7 @@ A `<<batch` block does not have to emit from a fragment var. It can run code tha
 
 Because `<<batch` is a global barrier, Batch 2 sees the results of Batch 1 across all tasks.
 
-**Tick depots for timely background work.** A microbatch topology enters lightweight polling mode when its subscribed depots have no new data and does not run the microbatch. If the background work needs to run on a regular cadence regardless of whether new events arrive, subscribe the topology to a **tick depot** (`declare-tick-depot`) that fires periodically. Emit from the tick fragment var (`(%tick)`) without binding any output — this forces the microbatch to run on every tick even when `*events` has no new data. Without a tick depot, the background `<<batch` only runs when new events arrive on other subscribed depots.
+**Tick depots for timely background work.** When subscribed depots have no new data, the next microbatch is delayed up to a minute by default (see "Behavior when subscribed depots are empty"). If the background work needs to run on a regular cadence regardless of whether new events arrive, subscribe the topology to a **tick depot** (`declare-tick-depot`) that fires periodically. Emit from the tick fragment var (`(%tick)`) without binding any output — this forces the microbatch to run on every tick even when `*events` has no new data. Without a tick depot, the background `<<batch` only runs when new events arrive on other subscribed depots.
 
 ## Transaction scope
 
