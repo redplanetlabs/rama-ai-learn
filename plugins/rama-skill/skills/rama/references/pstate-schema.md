@@ -118,7 +118,7 @@ disk seek per range):
 
 ### Deleting Subindexed Structures
 
-Delete a subindexed structure directly (e.g. `(keypath "a") VOID>`)
+Delete a subindexed structure directly (e.g. `(keypath "a") NONE>`)
 for proper cleanup. Deleting a **parent** of a subindexed structure
 leaves orphaned elements on disk.
 

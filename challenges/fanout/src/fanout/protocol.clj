@@ -45,4 +45,6 @@
      those accounts have made. During normal operation, must complete in roughly 50ms.
 
      During cases where in-memory state must be recovered, like failures or
-     module updates, these latency constraints can be loosened significantly."))
+     module updates, these latency constraints can be loosened significantly.
+     A recovered timeline may include followee posts made before the follow
+     and may omit entries from accounts unfollowed after delivery."))
