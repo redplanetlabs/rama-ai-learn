@@ -71,6 +71,18 @@ Navigate INTO the subindexed structure instead. Use `ALL`, `MAP-VALS`, `MAP-KEYS
 
 This applies everywhere subindexed values cross a serialization boundary: direct PState queries, query topology results, partitioner hops, mirror reads, and `select>` (which has an implicit partitioner).
 
+### "ValueSchemaMismatchException ... schema Long, value Integer"
+
+PState key and value schemas are strict about numeric types: a `Long` schema rejects an `Integer` value at write time. Common sources of Integers in dataflow: `(count ...)` and other Java APIs returning `int`. Coerce with `(long ...)` before writing:
+
+```clojure
+;; WRONG — count returns Integer, schema is Long
+(local-transform> [(keypath *k) (termval (count *items))] $$p)
+
+;; RIGHT
+(local-transform> [(keypath *k) (termval (long (count *items)))] $$p)
+```
+
 ### "Object cache disallowed {:class ...}"
 
 A constant of an unsupported type is embedded in dataflow code. Constants embedded in dataflow must be Java primitives (numbers, booleans, chars, strings, etc.) or Clojure's immutable data structures (vectors, maps, sets, lists) containing such values. Any other object type fails at module launch with this error.

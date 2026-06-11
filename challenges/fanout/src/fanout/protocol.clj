@@ -41,7 +41,7 @@
 
      During normal operation, the work to read a timeline must be FIXED —
      independent of how many accounts user-id follows and how many posts
-     those accounts have made. During normla operation, must complete in roughly 50ms.
+     those accounts have made. During normal operation, must complete in roughly 50ms.
 
-     During cases where where in-memory state must be recovered, like failures or
+     During cases where in-memory state must be recovered, like failures or
      module updates, these latency constraints can be loosened significantly."))

@@ -582,6 +582,12 @@ If there are any collected values, select returns
 (select-one (subselect ALL odd?) [1 2 3 4 5])
 ;; => [1 3 5]
 
+(select-one (subselect (keypath :a)) {:a [1 2 3]})
+;; => [[1 2 3]]
+
+(select-one (subselect (keypath :a) ALL) {:a [1 2 3]})
+;; => [1 2 3]
+
 ;; Sort only the odd elements, writing back to their original positions
 (multi-transform [(subselect ALL odd?) (term sort)] [5 4 1 2 3])
 ;; => [1 4 3 2 5]

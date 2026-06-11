@@ -2,7 +2,7 @@
 
 A `TaskGlobal` is a per-task mutable object with a managed lifecycle. It holds non-durable, task-local resources — caches, external clients, ML models, connection pools — that must be initialized per task and cleaned up on shutdown.
 
-Each task gets its own instance (serialized and deserialized independently). TaskGlobals do not transfer across tasks or partitioners.
+Each task gets its own instance (serialized and deserialized independently). TaskGlobals do not transfer across tasks or partitioners. Referencing a task global var after a partitioner accesses the **destination** task's instance — the var always resolves to the instance of whatever task the dataflow is currently executing on.
 
 ## Formal model
 
