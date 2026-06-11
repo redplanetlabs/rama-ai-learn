@@ -207,13 +207,20 @@ Note that static Java methods can be used in dataflow (e.g. `(System/currentTime
 ```ebnf
 dataflow-stmt   = op-call | if-block | cond-block | switch-block | do-block
                 | atomic-block | each-block | branch-block | loop-block
-                | filter-stmt | assert-stmt | throw-stmt | short-circuit ;
+                | filter-stmt | assert-stmt | throw-stmt | short-circuit
+                | partitioner ;
+                (* Partitioners ARE dataflow statements — there is no difference.
+                   They compose with all other dataflow: inside <<if/<<cond/<<switch
+                   branches, loop<- bodies, <<subsource cases, etc. The only
+                   restrictions are execution-context ones (see the context table):
+                   FnBody forbids partitioners, and batch blocks forbid them after
+                   aggregation begins. *)
 
 (* Context-stratified statements — see §5.10: *)
-topo-stmt       = dataflow-stmt | partitioner ;          (* TopoBody *)
-query-stmt      = dataflow-stmt | partitioner ;          (* QueryBody — implicit batch *)
+topo-stmt       = dataflow-stmt ;                        (* TopoBody *)
+query-stmt      = dataflow-stmt ;                        (* QueryBody — implicit batch *)
 fn-stmt         = dataflow-stmt ;                        (* FnBody — no partitioners, no <<batch *)
-batch-stmt      = dataflow-stmt | gen-source | agg-call | partitioner ;  (* BatchBlock *)
+batch-stmt      = dataflow-stmt | gen-source | agg-call ;  (* BatchBlock — no partitioners after agg *)
 
 op-call         = '(' callable { arg } [ output-bind ] ')' ;
                 (* output-bind and binding defined in Variable conventions *)
@@ -234,10 +241,7 @@ atomic-block    = '(<<atomic' { dataflow-stmt } ')' ;
 each-block      = '(<<each' { dataflow-stmt } ')' ;
 branch-block    = '(<<branch' anchor { dataflow-stmt } ')' ;
 
-loop-block      = '(loop<-' '[' { var init-expr } ':>' { var } ']' { loop-stmt } ')' ;
-loop-stmt       = dataflow-stmt | partitioner ;
-                (* Loop bodies can go async: partitioners, mirror local-select>,
-                   completable-future>, and other suspending operations are legal. *)
+loop-block      = '(loop<-' '[' { var init-expr } ':>' { var } ']' { dataflow-stmt } ')' ;
 continue-stmt   = '(continue>' { expr } ')' ;
 recur-stmt      = '(recur>' { expr } ')' ;
 self-call       = '(%self' { expr } [ output-bind ] ')' ;
@@ -348,7 +352,7 @@ inline-hook     = '(' callable { arg } ':>>' { dataflow-stmt } ')' ;
 
 ## Loop and branching patterns
 
-- `loop<-` bodies can go **async**: partitioners, `local-select>` on mirror PStates, `completable-future>`, and other suspending operations are legal inside the body (when the surrounding context permits them). The iteration suspends at the async boundary and resumes; `continue>` then proceeds normally.
+- `loop<-` bodies are ordinary dataflow: async operations (partitioners, mirror `local-select>`, `completable-future>`) suspend the iteration and resume it; `continue>` then proceeds normally.
 - `loop<-` termination: the `(else>)` branch must emit via `(:> *acc)` to produce loop output (§5.11). Missing emit → `*out` is `nil`.
 - Bounded iteration pattern:
 ```clojure

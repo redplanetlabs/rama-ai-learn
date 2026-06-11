@@ -23,6 +23,8 @@ A stream topology can retry a record even after all PState writes have completed
 
 Stream sources bind to **value vars** (`*x`), not fragment vars.
 
+Each `source>` in a `<<sources` block begins an independent dataflow section with its own variable scope — vars bound under one source are not visible under another.
+
 ### Event tree
 
 ```text

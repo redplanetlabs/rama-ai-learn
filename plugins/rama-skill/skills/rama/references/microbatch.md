@@ -10,6 +10,8 @@ Microbatch topologies provide exactly-once PState updates, cross-partition atomi
 
 Microbatch sources bind to **fragment vars** (`%mb`), not value vars. The fragment var represents the current batch of records across all tasks. Emitting from it with `(%mb :> *record)` iterates over all records in this microbatch on every task where records landed.
 
+Each `source>` in a `<<sources` block begins an independent dataflow section with its own variable scope — vars bound under one source are not visible under another.
+
 ```clojure
 (let [mb (microbatch-topology topologies "core")]
   (<<sources mb
@@ -121,7 +123,7 @@ txn-scope(microbatch) = microbatch-attempt   -- entire attempt across all tasks
 
 - **Exactly-once PState updates** across retries of the same microbatch ID. Non-deterministic ops (`|shuffle`, mirror reads) may vary per retry, but PState writes converge.
 - **Depot appends** (`depot-partition-append!`) from microbatch code do NOT have exactly-once semantics on retry. A retry re-appends.
-- **Phases per attempt:** prime (clear buffers, reset PStates to previous state) → process → commit (checkpoint + replicate; PState changes visible atomically).
+- **Phases per attempt:** prime (clear buffers, reset PStates to previous state) → process → commit (checkpoint + replicate). During the commit phase, each task commits independently and its writes become visible as soon as its own commit finishes — so external readers can observe two tasks on different microbatches at the same moment. The topology does not start the next microbatch until ALL tasks have committed successfully.
 
 ## Ack semantics
 

@@ -100,6 +100,7 @@ Constraints:
 +top-monotonic: bounded top-N using combiner infrastructure.
 Exact in batch/query finalization; in stream/microbatch, exactness
 requires monotonic (strictly ascending/descending) score movement per id.
+Sort values may be any Comparable (numbers, strings, UUIDs, vectors, ...).
 Buffer grows to 2×N before sort-and-prune (O(N log N)).
 Non-batched contexts skip final sort — client must sort.
 
