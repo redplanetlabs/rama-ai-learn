@@ -174,7 +174,7 @@ Use in loops that do significant synchronous work per iteration with no async bo
 
 ### :allow-yield? true
 
-Pass `{:allow-yield? true}` as an option to `local-select>` or `select>` when the read may iterate over many entries in a subindexed structure, and the PState in question is local (selects on mirror PStates automatically use this option on the other module). This allows the traversal to suspend mid-iteration if it exceeds the time budget, yielding the task thread to other events:
+Pass `{:allow-yield? true}` as an option to `local-select>` or `select>` when the read may iterate over many entries in a subindexed structure, and the PState in question is local. Mirror PState selects and foreign reads yield implicitly on the source task — no option needed there. This allows the traversal to suspend mid-iteration if it exceeds the time budget, yielding the task thread to other events:
 
 ```clojure
 (local-select> [(keypath *id) ALL]

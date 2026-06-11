@@ -115,6 +115,8 @@ To read an entire subindexed structure, use `foreign-select` with `ALL`:
 
 More commonly, you would select a subset of a subindexed structure with a range query navigator like `sorted-map-range` or `sorted-map-range-from`.
 
+Foreign reads **yield implicitly on the source task**: a foreign read that iterates many entries suspends periodically to let other events run, like `:allow-yield? true` does for topology-side reads. No option is needed (or available) — a large foreign read does not block the serving task thread uncooperatively.
+
 ## Syntax (EBNF)
 
 ```ebnf

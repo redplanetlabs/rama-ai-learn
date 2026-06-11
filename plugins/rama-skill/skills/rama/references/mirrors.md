@@ -132,7 +132,7 @@ mirror-custom = '(|custom$$' pstate-var fn-ref { arg } ')' ;
 
 Use `select>` (auto-repartitions) or `|hash$$ $$mirror *k` + `local-select>` (manual partition routing). Writes are not permitted.
 
-`local-select>` on a mirror is an **async boundary** (unlike colocated PState reads), so sequential mirror reads may see temporally inconsistent snapshots.
+`local-select>` on a mirror is an **async boundary** (unlike colocated PState reads), so sequential mirror reads may see temporally inconsistent snapshots. The read yields implicitly on the source module's task — large range reads do not block the source task thread, and no `:allow-yield?` option is needed.
 
 ```clojure
 ;; Auto-repartition read
