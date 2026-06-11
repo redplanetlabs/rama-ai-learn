@@ -21,7 +21,8 @@
     "Publish a post by account-id. Each invocation produces one timeline
      entry per follower. It also adds to the timeline of account-id. Visible
      within 5 milliseconds to the account-id user-timeline. Fanout to follower
-     and self timelines may complete asynchronously after that and take up to a second.")
+     and self timelines may complete asynchronously after that and take up to a second
+     (for users who don't have huge number of followers).")
   (get-user-timeline [this account-id]
     "Return every post account-id has ever made as a vector of content
      strings, in chronological order (oldest first).")
