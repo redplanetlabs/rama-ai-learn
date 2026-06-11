@@ -32,6 +32,7 @@ Your implementation must satisfy `fanout.protocol/Fanout`. See
    other post must be bounded — not proportional to the first post's
    follower count.
 4. Fanout for every post must complete eventually — no permanent backlog.
+5. Can assume a user does not post more than once every 5 seconds.
 
 ## Contract: `create-module`
 

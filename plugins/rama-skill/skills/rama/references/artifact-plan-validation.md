@@ -53,6 +53,23 @@ Read `PLAN.md` first, then fill in each item below. Extract the relevant data fr
 - For each TaskGlobal: FAIL if the data can be partially or fully stored in a compact, flat data structure.
 - Does any TaskGlobal store data that could be fetched from a PState at query time without violating latency requirements? If so, FAIL.
 
+## Minimality — adversarial simplification
+
+Attack the plan as an over-engineering reviewer: actively search for a SIMPLER plan that keeps every required property — fewer depots, fewer topologies, fewer PStates, fewer mechanisms, less logic.
+
+First, sketch in 2–4 sentences the simplest design you can construct that plausibly satisfies the spec. Diff the plan against the sketch: every mechanism in the plan that is absent from the sketch must justify itself below.
+
+For EVERY mechanism in the plan — each depot, topology, query topology, PState, TaskGlobal, and each nontrivial protocol (handoff, flag, counter, cursor, gate) — fill in a block:
+
+### <mechanism name>
+- **Delete it**: what specifically breaks? Name the required property lost, with a verbatim spec/IMPLICIT_SPEC citation. If nothing breaks, or the only thing lost is a property the spec does not require, FAIL — remove it from the plan.
+- **Merge or bypass it**: can it be folded into an existing mechanism, or replaced by doing the work directly where it's triggered? If yes with no required property lost, FAIL — simplify the plan.
+
+Rules:
+- A property the spec does not demand (e.g. exactness beyond stated guarantees) does NOT justify a mechanism.
+- "It is legal/documented" is not a justification — legality is necessary, not sufficient.
+- Indirection is itself a mechanism: if component A could do X directly but instead signals component B to do X, the signaling channel must justify itself.
+
 ## Spec coverage — trace every operation and constraint
 
 Enumerate every operation in the protocol/spec AND every constraint, prohibition, invariant, and edge case from the spec and `IMPLICIT_SPEC.md`. For each one, fill in a block below. Do NOT collapse multiple items into one block. Do NOT replace any block with a single-bullet "covered" claim — that bypasses the check.

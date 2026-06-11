@@ -124,6 +124,15 @@ Any expression that emits to `:>` can be nested inside another expression, no ma
   (identity "small" :> *label))
 ```
 
+`and>` and `or>` short-circuit exactly like Clojure's `and`/`or`: arguments — including nested expressions — are evaluated left to right, and evaluation stops as soon as the result is determined:
+
+```clojure
+(?<-
+  (identity nil :> *r)
+  (println (and> (some? *r) (zero? *r))))
+;; prints false — (zero? *r) is never evaluated
+```
+
 Nesting works anywhere you could put a variable: `(+ (* *x *x) (* *y *y) :> *sum-sq)`, `(filter> (> *amount 0))`, `(<<cond (case> (= *level :high)) ...)`.
 
 These are also equivalent even though `ops/range>` emits many times:

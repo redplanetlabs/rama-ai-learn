@@ -4,6 +4,8 @@ A `TaskGlobal` is a per-task mutable object with a managed lifecycle. It holds n
 
 Each task gets its own instance (serialized and deserialized independently). TaskGlobals do not transfer across tasks or partitioners. Referencing a task global var after a partitioner accesses the **destination** task's instance — the var always resolves to the instance of whatever task the dataflow is currently executing on.
 
+A task global can be read and written to from any topology (stream, microbatch, query). They are not owned by topologies like PStates are.
+
 ## Formal model
 
 ```text
