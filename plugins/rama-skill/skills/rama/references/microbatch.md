@@ -29,7 +29,7 @@ Microbatches process sequentially, and the next one does not start until all dat
 
 ### Behavior when subscribed depots are empty
 
-When a microbatch topology's subscribed depots have no new data, the next microbatch is **delayed** — the topology enters lightweight polling mode waiting for new data, sleeping up to **one minute by default** between empty checks (`topology.microbatch.empty.sleep.time.millis`). Any pending background work scheduled inside the topology stalls for that delay. If background work must run on a faster cadence regardless of incoming data, subscribe the topology to a tick depot (see "Tick depots for timely background work" below).
+When a microbatch topology's subscribed depots have no new data, the next microbatch is **delayed** — the topology enters lightweight polling mode, sleeping up to **one minute by default** between empty microbatches (`topology.microbatch.empty.sleep.time.millis`). A new depot append does not interrupt that sleep directly, but the lightweight polling checks for new data every 200ms by default (`topology.microbatch.poll.new.data.frequency.millis`) and kicks in earlier — so new data starts the next microbatch within about the polling interval, not the full sleep. Pending background work inside the topology, with no new data arriving, stalls for the full delay. If background work must run on a faster cadence regardless of incoming data, subscribe the topology to a tick depot (see "Tick depots for timely background work" below).
 
 ### `<<batch` blocks
 
