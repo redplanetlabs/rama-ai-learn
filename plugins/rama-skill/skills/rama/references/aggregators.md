@@ -7,10 +7,11 @@ require the PState value to already exist.
 
 In batch blocks and query topologies, aggregators always fire and bind
 their output even when zero rows reach them: the output is the
-aggregator's zero value (`0` for `+sum`, `[]` for `+vec-agg`, `#{}` for
-`+set-agg`, `nil` for `+last`, etc.). Do NOT add special-case branches
-for "empty input" — the zero value flows through normally. See batch.md
-"Zero rows — aggregators still fire".
+aggregator's zero value — `0` for `+sum`/`+count`, `[]` for `+vec-agg`,
+and `nil` for `+set-agg`, `+map-agg`, and `+last`. Do NOT add
+special-case branches for "empty input" inside the dataflow — but code
+consuming the output must tolerate the `nil` empties when zero rows are
+possible. See batch.md "Zero rows — aggregators still fire".
 
 ## Formalism
 
