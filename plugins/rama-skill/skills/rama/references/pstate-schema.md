@@ -18,6 +18,9 @@ is determined by its schema.
 Schemas nest arbitrarily: values of maps/vectors/fixed-keys can be
 other schemas. Set values are the exception — they must be classes.
 
+Any PState location can be set to `nil`, regardless of its declared
+type — schemas constrain non-nil values; `nil` is always permitted.
+
 ## Top-Level Constraint
 
 Top-level schema must be one of:
