@@ -101,25 +101,20 @@ If a validation artifact already exists from a prior attempt at this phase or a 
 
 Phases 2, 4, 6, and 7 emit verdicts as the LAST non-empty line of output. The runner extracts this line; do not put any text after it.
 
-- **Phase 2** (plan validation) — binary verdict:
-  ```
-  PHASE_VALIDATION:pass
-  PHASE_VALIDATION:fail
-  ```
-- **Phase 4** (impl validation) and **Phase 6** (test validation) — three-way verdict:
+- **Phase 2** (plan validation), **Phase 4** (impl validation), and **Phase 6** (test validation) — three-way verdict:
   ```
   PHASE_VALIDATION:pass
   PHASE_VALIDATION:minor-fail
   PHASE_VALIDATION:major-fail
   ```
-  See the artifact template for the rubric distinguishing minor from major.
+  See the artifact template and per-phase doc for the rubric distinguishing minor from major. For Phase 2, minor-fail means the validator fixed PLAN.md directly and the build proceeds; major-fail sends the build back to Phase 1.
 - **Phase 7** (finish) — binary verdict reflecting whether tests pass:
   ```
   PHASE_VALIDATION:pass
   PHASE_VALIDATION:fail
   ```
 
-Default to FAIL (or `major-fail` for phases 4 and 6). PASS only after the criteria in the per-phase doc are met.
+Default to FAIL (or `major-fail` for phases 2, 4, and 6). PASS only after the criteria in the per-phase doc are met.
 
 Other phases (0, 1, 3, 5) do not emit a verdict — the runner moves on once the output artifact exists.
 

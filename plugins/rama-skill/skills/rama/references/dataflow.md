@@ -329,6 +329,7 @@ inline-hook     = '(' callable { arg } ':>>' { dataflow-stmt } ')' ;
 
 ## State modeling and dataflow notes
 
+- Variable transfer across partitioners is liveness-based: only vars referenced by code after the partitioner are serialized and shipped. A large value bound before a hop costs nothing per emitted row unless downstream code uses it.
 - Prefer `term` to read-modify-write.
 - Clojure macros (`->`, `->>`, etc.) expand before Rama compilation and are valid in dataflow code.
 - Nested expressions can capture single `:>` emits: `(* (- 10 4) (+ 1 2) :> *res)`.
