@@ -39,6 +39,8 @@ Vectors and sets cannot be top-level. Use `java.util.ArrayList` or
 
 **Writes are batched to disk** according to topology type: microbatch flushes at the end of each microbatch attempt, stream flushes at the end of each batch of streaming events executed together on a task. Individual `local-transform>` calls within a batch update an in-memory buffer; the disk write happens once at batch boundary.
 
+**Read visibility:** PState reads from inside the owning topology see its uncommitted writes. Readers outside the owning topology — query topologies, foreign reads, other topologies — see only committed state.
+
 **Nested structures** — maps, sets, and vectors nested inside a first-class schema — are stored as single serialized values by default. Without subindexing, the entire nested structure must be read from and written to disk even for a single-element operation.
 
 ## Subindexing

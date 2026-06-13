@@ -40,6 +40,8 @@ Partition ordering: for any two tasks A, B, if A sends events e₁, e₂, e₃ t
 
 In a stream topology, PState writes are committed (replicated and made durable) at **partitioner boundaries**. Each partitioner call causes all pending writes on the current task to commit before moving computation to the next task. Writes between two partitioners form one atomic group.
 
+Reads inside the owning topology see its uncommitted PState writes; readers outside the owning topology — query topologies, foreign reads, other topologies — see only committed state.
+
 This means:
 - Writes before a partitioner are committed before the partitioner executes.
 - Writes after a partitioner are in a new transaction group.
