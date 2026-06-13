@@ -149,6 +149,15 @@
    :name       (:name profile)
    :content    content})
 
+(defn order-by-index
+  "Restore the order `cache-recent` returned. The per-poster fan-out that
+   fetches names/content reorders entries as they return to origin, so each
+   carries its original page index; sort by it and strip it. Pagination uses
+   the page's last post-id as the cursor, so the page must preserve the
+   buffer's order, not re-sort by post-id."
+  [indexed]
+  (mapv second (sort-by first indexed)))
+
 (def social-graph-module-name (get-module-name sg/SocialGraphModule))
 
 (defn sorted-set-last [^java.util.SortedSet s] (.last s))
@@ -298,14 +307,15 @@
     (<<if (not (cache-initialized? *cache *user-id))
       (invoke-query "reconstruct-timeline" *user-id))
     (cache-recent *cache *user-id *from-post-id 20 :> *triples)
-    (ops/explode *triples :> [*poster-id *msb *lsb])
+    (ops/explode-indexed *triples :> *idx [*poster-id *msb *lsb])
     (->uuid *msb *lsb :> *post-id)
     (|hash *poster-id)
     (local-select> (keypath *poster-id) $$profiles :> *profile)
     (local-select> (keypath *poster-id *post-id) $$user-posts :> *content)
     (build-timeline-entry *post-id *poster-id *profile *content :> *entry)
     (|origin)
-    (aggs/+vec-agg *entry :> *result)))
+    (aggs/+vec-agg [*idx *entry] :> *indexed)
+    (order-by-index *indexed :> *result)))
 
 (defn make-client
   [ipc]
