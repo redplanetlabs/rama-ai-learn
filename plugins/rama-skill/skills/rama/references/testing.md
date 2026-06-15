@@ -31,6 +31,8 @@ simulates a full cluster in a single process with no mocks required.
 
 **Randomize task count.** Unless a test requires a specific number of tasks, use a random task count (e.g., `(rand-nth [2 4 8])`) to exercise partitioning logic across different configurations. Partition alignment bugs often only surface with certain task counts.
 
+**Launch config invariant: `:tasks` ≥ `:threads` ≥ `:workers`.** `:threads` is the cluster-wide total of task threads spread across all workers, and each worker needs at least one. Violating it fails at launch (e.g. "Number of workers must be less than or equal to the number of threads").
+
 ## Axioms
 
 1. **IPC = real cluster** — no capability or semantic differences; only replication factor (always 1) and serialization scope differ
@@ -192,6 +194,11 @@ share the same module name:
 
 Existing depot and PState clients automatically redirect to the
 updated module instance.
+
+`update-module!` also accepts an **unchanged** module value. This is
+useful for simulating a worker restart in tests: task globals are
+recreated (`prepareForTask` runs again) and all in-memory state is
+lost, while PStates and depots persist.
 
 ### Removing PStates or Depots on Update
 

@@ -478,12 +478,12 @@
   "Outer timeout for a single subprocess invocation (seconds).
   Phase invocations bind this to min(default, time-remaining-in-overall-budget)
   so a single phase can't exceed either the per-call cap or the run-wide cap."
-  3600)
+  (* 3 3600))
 
 (def ^:dynamic *overall-timeout-s*
   "Hard cap on total wall-clock for one challenge run (seconds).
   Includes all phase invocations, retries, lint, and test runs."
-  10800)
+  (* 6 3600))
 
 (defn time-remaining-s
   "Seconds left in the overall challenge run budget. Never negative."
@@ -973,12 +973,27 @@
   [project-root challenge-name]
   (invoke-command! ["bash" "scripts/save-attempt.sh" challenge-name] project-root))
 
+(defn append-reasoning-sentinel!
+  "Append a phase sentinel to the challenge's REASONING.md. Each phase
+  invocation is instructed to append its reasoning below the sentinel, so
+  entries can be attributed to the phase/attempt that wrote them."
+  [project-root challenge-name phase-id attempt]
+  (let [impl-dir (fs/path project-root "implementations" challenge-name)
+        path     (fs/path impl-dir "REASONING.md")
+        ts       (.format (java.time.LocalDateTime/now)
+                          (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm:ss"))]
+    (fs/create-dirs impl-dir)
+    (spit (str path)
+          (format "\n=== PHASE %d attempt %d — %s ===\n\n" phase-id attempt ts)
+          :append true)))
+
 (defn run-phase!
   "Invoke one phase of a challenge. Clamps the per-call timeout to whatever's
   left in the overall run budget. Returns a result map with everything the
   caller needs to decide next steps and accumulate per-phase telemetry."
   [agent-fns challenge-name phase-id attempt
    project-root agent-name model reasoning run-start-time run-start-millis]
+  (append-reasoning-sentinel! project-root challenge-name phase-id attempt)
   (let [cmd ((:phase-cmd agent-fns) challenge-name phase-id project-root model reasoning)
         remaining (long (time-remaining-s run-start-millis))
         effective-timeout (min *outer-timeout-s* remaining)
@@ -1103,15 +1118,18 @@
            :failure-reason (format "Phase %d (attempt %d) exited %d." phase-id attempt (:exit r))
            :transcript-path (:transcript-path r)}
 
-          ;; Phase 2: binary verdict.
+          ;; Phase 2: three-way verdict.
+          ;; pass       → phase 3
+          ;; minor-fail → phase 3 (validator fixes plan directly, no re-validation)
+          ;; major-fail → phase 1 (architecture needs rethinking)
           (= phase-id 2)
           (cond
-            (= :pass (:verdict r))
+            (or (= :pass (:verdict r)) (= :minor-fail (:verdict r)))
             (recur 3 attempts' skip-flags
                    (assoc validation-fail-counts 2 0)
                    results')
 
-            (= :fail (:verdict r))
+            (= :major-fail (:verdict r))
             (let [prior-fails (get validation-fail-counts 2 0)
                   vfc' (assoc validation-fail-counts 2 (inc prior-fails))]
               (if (< prior-fails validation-retry-cap)
@@ -1749,4 +1767,5 @@
           results)))))
 
 (when (= *file* (System/getProperty "babashka.file"))
-  (-main *command-line-args*))
+  (-main *command-line-args*)
+  (shell "bash" "-c" "for i in $(seq 10); do printf '\\a'; sleep 0.3; done"))

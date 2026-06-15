@@ -59,7 +59,7 @@
               "unfollow clears 3's followee set"))
 
         (testing "unknown target returns empty followers"
-          (is (= #{} (r/foreign-invoke-query followers 12345))))))))
+          (is (empty? (r/foreign-invoke-query followers 12345))))))))
 
 (deftest spreads-across-tasks-and-round-robins
   (testing "with a small cutoff, allocation hits 'n' branch repeatedly then 'r' (round-robin)"

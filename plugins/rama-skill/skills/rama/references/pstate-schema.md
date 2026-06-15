@@ -18,6 +18,9 @@ is determined by its schema.
 Schemas nest arbitrarily: values of maps/vectors/fixed-keys can be
 other schemas. Set values are the exception — they must be classes.
 
+Any PState location can be set to `nil`, regardless of its declared
+type — schemas constrain non-nil values; `nil` is always permitted.
+
 ## Top-Level Constraint
 
 Top-level schema must be one of:
@@ -36,6 +39,8 @@ Vectors and sets cannot be top-level. Use `java.util.ArrayList` or
 
 **Writes are batched to disk** according to topology type: microbatch flushes at the end of each microbatch attempt, stream flushes at the end of each batch of streaming events executed together on a task. Individual `local-transform>` calls within a batch update an in-memory buffer; the disk write happens once at batch boundary.
 
+**Read visibility:** PState reads from inside the owning topology see its uncommitted writes. Readers outside the owning topology — query topologies, foreign reads, other topologies — see only committed state.
+
 **Nested structures** — maps, sets, and vectors nested inside a first-class schema — are stored as single serialized values by default. Without subindexing, the entire nested structure must be read from and written to disk even for a single-element operation.
 
 ## Subindexing
@@ -44,7 +49,10 @@ Vectors and sets cannot be top-level. Use `java.util.ArrayList` or
 - O(1) point lookups into arbitrarily large nested structures
 - Subindexed maps and sets are sorted — efficient range queries
   - Sorting is lexicographic based on the serialized form of the key
+  - UUID7 keys sort in time order (see unique-ids.md)
 - O(1) size queries (when size tracking is on)
+
+**Critical constraint:** A subindexed structure is NOT a plain value — it is a handle to RocksDB storage. It can be used like a plain data structure, but it cannot be transferred over network boundaries. Queries must always navigate INTO it using element/range navigators (`ALL`, `MAP-VALS`, `MAP-KEYS`, `sorted-map-range`, `sorted-set-range-from-start`, etc.) to access individual elements, which are plain serializable values.
 
 ### When to Subindex
 
@@ -106,16 +114,16 @@ Use range navigators for efficient disk-level iteration (single
 disk seek per range):
 
 ```clojure
-(sorted-map-range :a :z)                          ;; inclusive both ends
+(sorted-map-range :a :z)                          ;; start inclusive, end exclusive
 (sorted-map-range :a :z {:inclusive-start? false}) ;; exclusive start
-(sorted-map-range-from :k 10)                     ;; from key, up to N elements
-(sorted-map-range-to :k 10)                       ;; up to key, N elements in reverse
+(sorted-map-range-from :k 10)                     ;; from key, first N entries scanning forward
+(sorted-map-range-to :k 10)                       ;; up to key (exclusive), last N entries scanning backward
 ;; Set variants: sorted-set-range, sorted-set-range-from, sorted-set-range-to
 ```
 
 ### Deleting Subindexed Structures
 
-Delete a subindexed structure directly (e.g. `(keypath "a") VOID>`)
+Delete a subindexed structure directly (e.g. `(keypath "a") NONE>`)
 for proper cleanup. Deleting a **parent** of a subindexed structure
 leaves orphaned elements on disk.
 

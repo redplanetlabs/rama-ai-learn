@@ -40,9 +40,9 @@ RUN curl -fsSL https://raw.githubusercontent.com/clojure-lsp/clojure-lsp/master/
     && rm /tmp/clojure-lsp-install.sh
 
 # Node.js + Claude Code
+ARG CACHEBUST=1
 RUN curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
     && apt-get install -y nodejs \
-    && npm install -g @anthropic-ai/claude-code \
-    && chmod +x /usr/lib/node_modules/@anthropic-ai/claude-code/vendor/ripgrep/*/rg
+    && npm install -g @anthropic-ai/claude-code
 
 WORKDIR /work

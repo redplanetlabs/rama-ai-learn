@@ -1,4 +1,4 @@
 {:mvn/repos {"nexus-releases" {:url "https://nexus.redplanetlabs.com/repository/maven-public-releases"}}
- :deps {com.rpl/rama        {:mvn/version "0.0.6-SNAPSHOT"}
+ :deps {com.rpl/rama        {:mvn/version "1.8.0"}
         com.rpl/rama-helpers {:mvn/version "0.10.0"}
         org.clojure/clojure {:mvn/version "1.12.4"}}}

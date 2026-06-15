@@ -121,5 +121,4 @@
                    {:allow-yield? true}
                    :> *follower-id)
     (|origin)
-    (aggs/+set-agg *follower-id :> *acc)
-    (or> *acc #{} :> *followers)))
+    (aggs/+set-agg *follower-id :> *followers)))

@@ -124,6 +124,15 @@ Any expression that emits to `:>` can be nested inside another expression, no ma
   (identity "small" :> *label))
 ```
 
+`and>` and `or>` short-circuit exactly like Clojure's `and`/`or`: arguments — including nested expressions — are evaluated left to right, and evaluation stops as soon as the result is determined:
+
+```clojure
+(?<-
+  (identity nil :> *r)
+  (println (and> (some? *r) (zero? *r))))
+;; prints false — (zero? *r) is never evaluated
+```
+
 Nesting works anywhere you could put a variable: `(+ (* *x *x) (* *y *y) :> *sum-sq)`, `(filter> (> *amount 0))`, `(<<cond (case> (= *level :high)) ...)`.
 
 These are also equivalent even though `ops/range>` emits many times:
@@ -165,7 +174,7 @@ Use in loops that do significant synchronous work per iteration with no async bo
 
 ### :allow-yield? true
 
-Pass `{:allow-yield? true}` as an option to `local-select>` or `select>` when the read may iterate over many entries in a subindexed structure, and the PState in question is local (selects on mirror PStates automatically use this option on the other module). This allows the traversal to suspend mid-iteration if it exceeds the time budget, yielding the task thread to other events:
+Pass `{:allow-yield? true}` as an option to `local-select>` or `select>` when the read may iterate over many entries in a subindexed structure, and the PState in question is local. Mirror PState selects and foreign reads yield implicitly on the source task — no option needed there. This allows the traversal to suspend mid-iteration if it exceeds the time budget, yielding the task thread to other events:
 
 ```clojure
 (local-select> [(keypath *id) ALL]
@@ -207,13 +216,20 @@ Note that static Java methods can be used in dataflow (e.g. `(System/currentTime
 ```ebnf
 dataflow-stmt   = op-call | if-block | cond-block | switch-block | do-block
                 | atomic-block | each-block | branch-block | loop-block
-                | filter-stmt | assert-stmt | throw-stmt | short-circuit ;
+                | filter-stmt | assert-stmt | throw-stmt | short-circuit
+                | partitioner ;
+                (* Partitioners ARE dataflow statements — there is no difference.
+                   They compose with all other dataflow: inside <<if/<<cond/<<switch
+                   branches, loop<- bodies, <<subsource cases, etc. The only
+                   restrictions are execution-context ones (see the context table):
+                   FnBody forbids partitioners, and batch blocks forbid them after
+                   aggregation begins. *)
 
 (* Context-stratified statements — see §5.10: *)
-topo-stmt       = dataflow-stmt | partitioner ;          (* TopoBody *)
-query-stmt      = dataflow-stmt | partitioner ;          (* QueryBody — implicit batch *)
+topo-stmt       = dataflow-stmt ;                        (* TopoBody *)
+query-stmt      = dataflow-stmt ;                        (* QueryBody — implicit batch *)
 fn-stmt         = dataflow-stmt ;                        (* FnBody — no partitioners, no <<batch *)
-batch-stmt      = dataflow-stmt | gen-source | agg-call | partitioner ;  (* BatchBlock *)
+batch-stmt      = dataflow-stmt | gen-source | agg-call ;  (* BatchBlock — no partitioners after agg *)
 
 op-call         = '(' callable { arg } [ output-bind ] ')' ;
                 (* output-bind and binding defined in Variable conventions *)
@@ -232,7 +248,7 @@ switch-case     = '(case>' value ')' { dataflow-stmt } ;
 do-block        = '(<<do' { dataflow-stmt } ')' ;
 atomic-block    = '(<<atomic' { dataflow-stmt } ')' ;
 each-block      = '(<<each' { dataflow-stmt } ')' ;
-branch-block    = '(<<branch' { dataflow-stmt } ')' ;
+branch-block    = '(<<branch' anchor { dataflow-stmt } ')' ;
 
 loop-block      = '(loop<-' '[' { var init-expr } ':>' { var } ']' { dataflow-stmt } ')' ;
 continue-stmt   = '(continue>' { expr } ')' ;
@@ -269,7 +285,7 @@ named-stream-bind = ':' label '>' anchor-var var { var } ;
 | Do block | `(<<do ...)` |
 | Atomic block | `(<<atomic ...)` |
 | Each (per-element iteration) | `(<<each ...)` |
-| Branch (parallel) | `(<<branch ...)` |
+| Branch off an anchor | `(<<branch <root> ...)` |
 | Loop | `(loop<- [*i 0 :> *out] ... (continue> (inc *i)))` |
 | Recur (ramafn tail-call) | `(recur> *new-args)` |
 | Self-invocation (recursion) | `(%self *arg1 *arg2 :> *result)` |
@@ -313,16 +329,32 @@ inline-hook     = '(' callable { arg } ':>>' { dataflow-stmt } ')' ;
 
 ## State modeling and dataflow notes
 
+- Variable transfer across partitioners is liveness-based: only vars referenced by code after the partitioner are serialized and shipped. A large value bound before a hop costs nothing per emitted row unless downstream code uses it.
 - Prefer `term` to read-modify-write.
 - Clojure macros (`->`, `->>`, etc.) expand before Rama compilation and are valid in dataflow code.
 - Nested expressions can capture single `:>` emits: `(* (- 10 4) (+ 1 2) :> *res)`.
-- Constants in dataflow must be serializable (basic types, records, functions, `RamaSerializable`).
+- Constants embedded in dataflow code must be Java primitives (numbers, booleans, chars, strings, etc.) or Clojure's immutable data structures (vectors, maps, sets, lists) containing such values. Java arrays (e.g. `long-array`, `object-array`) and other object types cannot be embedded and fail at module launch with `Object cache disallowed {:class ...}`. Work around by calling a Clojure function that returns the constant.
 
 ## Control flow construct descriptions
 
 - `<<atomic`: waits for all synchronous work in its block before continuing; async boundaries (partitioners) do not block.
 - `<<shadowif`: conditionally shadows a variable's value — `(<<shadowif *v pred new-val)` replaces `*v` with `new-val` if `(pred *v)` is true, otherwise `*v` is unchanged.
-- `<<branch`: parallel execution branches; containing code continues after all branches complete.
+- `<<branch`: attaches its body as a branch off the given anchor — sugar for the `anchor>`/`hook>` pattern with the branch body indented as a subblock. Code after the `<<branch` attaches to the code *before* it, not to the branch body. Requires the anchor argument. These are equivalent:
+```clojure
+;; anchor>/hook>
+(identity 1 :> *a)
+(anchor> <root>)
+(println "Result 1:" (dec *a))
+(hook> <root>)
+(println "Result 2:" *a)
+
+;; <<branch
+(identity 1 :> *a)
+(anchor> <root>)
+(<<branch <root>
+  (println "Result 1:" (dec *a)))
+(println "Result 2:" *a)
+```
 - `<<with-substitutions`: replaces var references during dataflow compilation. Idiomatic way to access module-scoped PStates in `deframafn`/`deframaop` bodies — prevents accidentally transferring a PState partition reference across a partitioner boundary. PStates can also be passed as parameters, which is fine as long as no partitioner in the body causes the PState var to be accessed on a different task.
 - `?<-`: compiles and runs a dataflow block. `:clj>` output stream returns values to Clojure. Test and repl only.
 - `continue>`: loop iteration. `recur>`: tail-call recursion within `ramafn` bodies (no ramaop invokes between start and callsite).
@@ -330,6 +362,7 @@ inline-hook     = '(' callable { arg } ':>>' { dataflow-stmt } ')' ;
 
 ## Loop and branching patterns
 
+- `loop<-` bodies are ordinary dataflow: async operations (partitioners, mirror `local-select>`, `completable-future>`) suspend the iteration and resume it; `continue>` then proceeds normally.
 - `loop<-` termination: the `(else>)` branch must emit via `(:> *acc)` to produce loop output (§5.11). Missing emit → `*out` is `nil`.
 - Bounded iteration pattern:
 ```clojure

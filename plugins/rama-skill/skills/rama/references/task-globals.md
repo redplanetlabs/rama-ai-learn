@@ -2,7 +2,9 @@
 
 A `TaskGlobal` is a per-task mutable object with a managed lifecycle. It holds non-durable, task-local resources — caches, external clients, ML models, connection pools — that must be initialized per task and cleaned up on shutdown.
 
-Each task gets its own instance (serialized and deserialized independently). TaskGlobals do not transfer across tasks or partitioners.
+Each task gets its own instance (serialized and deserialized independently). TaskGlobals do not transfer across tasks or partitioners. Referencing a task global var after a partitioner accesses the **destination** task's instance — the var always resolves to the instance of whatever task the dataflow is currently executing on.
+
+A task global can be read and written to from any topology (stream, microbatch, query). They are not owned by topologies like PStates are.
 
 ## Formal model
 
@@ -20,7 +22,11 @@ TaskGlobalWithTick extends TaskGlobal :
 
 TaskGlobals are accessible from any topology within the owning module. They are not accessible cross-module (no mirror equivalent).
 
+TaskGlobals can be **mutated** from any topology type — stream, microbatch, and query topologies alike. The "read-only" restriction on query topologies applies to PStates, not task globals. Tasks are single-threaded, so mutation is safe without locking wherever it happens.
+
 ## Declaration
+
+`declare-object` values follow the same rules as constants embedded in dataflow code (see dataflow.md). Invalid values fail at module launch with `Object cache disallowed {:class ...}`.
 
 ```clojure
 ;; Plain value (no lifecycle)

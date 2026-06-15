@@ -32,11 +32,43 @@ Any specification in the README or protocol is non-negotiable.
 
 ## Project-specific rules
 
+- **Do NOT run any command with `run_in_background`.** You are running headlessly: ending your turn ends the session, and background-task completion notifications will NEVER arrive. A backgrounded test run is orphaned and the phase fails with no verdict. Run long commands (test suites, REPL checks) in the foreground with an explicit generous timeout.
 - **rama-helpers is available but not necessarily needed.** Use only if relevant and helpful.
 - **Test harness does NOT influence topology choice.** The challenge harness (`wait-for-processing*`) auto-detects stream vs microbatch and synchronizes correctly for both. Choose topology based on domain requirements, not test synchronization patterns.
 - **Phase 5 (tests) constraints:**
   - Do NOT use `rama-challenges.harness` in tests — not in requires, imports, or fully-qualified calls.
   - If the module uses tick depots, use `rama-challenges.shared/REPLACE-TICK-DEPOTS` (already on classpath). Read its docstring for usage.
+
+## Reasoning log (every phase)
+
+`implementations/<challenge_name>/REASONING.md` is an append-only reasoning
+log. The runner has already appended a sentinel line for this phase
+(`=== PHASE <N> attempt <K> — <timestamp> ===`); your entries go below it.
+
+As you work, append your reasoning AT EACH DECISION POINT — the alternatives
+you weighed, why you rejected them, and which constraint drove the choice.
+Write entries as you decide, not as a summary at the end; a retrospective
+summary loses the dead ends, and the dead ends are the point.
+
+ALWAYS log anything you are confused or uncertain about, AT THE MOMENT of
+confusion: an API whose behavior you can't predict, documentation that seems
+ambiguous or contradictory, an error you don't understand, a constraint you
+aren't sure how to satisfy. Log it even if — especially if — you resolve the
+confusion moments later, and note what resolved it. Confusion entries are the
+single most valuable content in this file: they identify exactly where the
+skill documentation failed you. Mark them with a `CONFUSION:` prefix.
+
+- Append with:
+  ```
+  cat >> implementations/<challenge_name>/REASONING.md <<'EOF'
+  ...your reasoning...
+  EOF
+  ```
+- Do NOT rewrite REASONING.md, do NOT edit or delete prior entries, and do
+  NOT remove sentinel lines. The file is append-only.
+- This phase is NOT complete until REASONING.md has at least one entry for
+  this phase. Validation phases (2, 4, 6, 7): record the reasoning behind
+  your verdict before emitting it.
 
 ## Phase dispatch
 
@@ -69,25 +101,20 @@ If a validation artifact already exists from a prior attempt at this phase or a 
 
 Phases 2, 4, 6, and 7 emit verdicts as the LAST non-empty line of output. The runner extracts this line; do not put any text after it.
 
-- **Phase 2** (plan validation) — binary verdict:
-  ```
-  PHASE_VALIDATION:pass
-  PHASE_VALIDATION:fail
-  ```
-- **Phase 4** (impl validation) and **Phase 6** (test validation) — three-way verdict:
+- **Phase 2** (plan validation), **Phase 4** (impl validation), and **Phase 6** (test validation) — three-way verdict:
   ```
   PHASE_VALIDATION:pass
   PHASE_VALIDATION:minor-fail
   PHASE_VALIDATION:major-fail
   ```
-  See the artifact template for the rubric distinguishing minor from major.
+  See the artifact template and per-phase doc for the rubric distinguishing minor from major. For Phase 2, minor-fail means the validator fixed PLAN.md directly and the build proceeds; major-fail sends the build back to Phase 1.
 - **Phase 7** (finish) — binary verdict reflecting whether tests pass:
   ```
   PHASE_VALIDATION:pass
   PHASE_VALIDATION:fail
   ```
 
-Default to FAIL (or `major-fail` for phases 4 and 6). PASS only after the criteria in the per-phase doc are met.
+Default to FAIL (or `major-fail` for phases 2, 4, and 6). PASS only after the criteria in the per-phase doc are met.
 
 Other phases (0, 1, 3, 5) do not emit a verdict — the runner moves on once the output artifact exists.
 

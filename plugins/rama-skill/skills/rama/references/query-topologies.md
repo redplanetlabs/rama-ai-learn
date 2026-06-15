@@ -113,7 +113,7 @@ Reads a user's profile and friend list on one partition, then fans out to each f
 - Single-argument: `[*k :> *result]`
 - Multi-argument: `[*a *b :> *result]`
 
-## Leading partitioner optimization
+## Leading partitioner
 
 If the first line of a query topology is a partitioner, it is evaluated client-side to route the query directly to the right task, avoiding a random-task hop. Requirements:
 - Must be a built-in partitioner (not custom)
@@ -132,6 +132,8 @@ If the first line of a query topology is a partitioner, it is evaluated client-s
 (invoke-query "query-name" *arg :> *result)
 ```
 
+`invoke-query` is an async boundary that acts as a barrier: nothing in the continuation runs until the sub-query finishes, and the continuation resumes on the same task with the sub-query's complete result. This makes a nested query the way to get a barrier inside a query topology: a query topology's batch has only one aggregation round, so when multi-step work needs an "everything gathered" point before continuing, put the gathering in a separate query topology invoked from pre-agg.
+
 ## Self-invocation (recursion)
 
 Query topologies can call themselves via (invoke-query "query-name" ...argz). Execution is timeout-bounded to prevent infinite loops.
@@ -142,9 +144,13 @@ Every query topology has an implicit unreplicated in-memory PState `$$<topology-
 
 ## Constraints
 
-- Read-only: no `local-transform>` on user PStates (only the implicit temp PState)
+- Read-only applies to PStates only: no `local-transform>` on user PStates (the implicit temp PState is writable). The restriction does NOT extend to other effects:
+  - Task global mutation IS allowed from query topologies — task globals can be mutated from anywhere; tasks are single-threaded, so the usual task-global safety rules apply unchanged.
+  - Depot appends ARE allowed from query topologies (`depot-partition-append!`).
+- The topology's input arguments are in scope everywhere in the body, including post-agg
 - Must end with `|origin` as the final pre-agg partitioner
 - Output variable must be emitted exactly once
+- The output variable is always bound, even when pre-agg emits zero rows — aggregators fire with their zero value (see batch.md "Zero rows — aggregators still fire")
 - No partitioners in post-agg
 
 ## Troubleshooting

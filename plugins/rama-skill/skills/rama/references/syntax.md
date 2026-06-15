@@ -97,10 +97,14 @@ mirror-decl   = '(mirror-depot' 'setup' depot-var string string ')'
               | '(mirror-pstate' 'setup' pstate-var string string ')'
               | '(mirror-query' 'setup' var string string ')' ;
 
-dynamic-opt   = '(set-launch-module-dynamic-option!' 'setup' keyword value ')'
-              | '(set-launch-depot-dynamic-option!' 'setup' depot-var keyword value ')'
-              | '(set-launch-pstate-dynamic-option!' 'setup' pstate-var keyword value ')'
-              | '(set-launch-topology-dynamic-option!' 'setup' topo-var keyword value ')' ;
+dynamic-opt   = '(set-launch-module-dynamic-option!' 'setup' option-string value ')'
+              | '(set-launch-depot-dynamic-option!' 'setup' depot-name-string option-string value ')'
+              | '(set-launch-pstate-dynamic-option!' 'setup' pstate-name-string option-string value ')'
+              | '(set-launch-topology-dynamic-option!' 'setup' topology-name-string option-string value ')' ;
+(* Option names are dotted strings, NOT keywords. set-launch-topology-dynamic-option!
+   takes the topology NAME as a string, not the topology object. Example:
+   (set-launch-topology-dynamic-option!
+     setup "etl" "topology.microbatch.phase.timeout.millis" 60000) *)
 ```
 
 | Construct | Syntax |

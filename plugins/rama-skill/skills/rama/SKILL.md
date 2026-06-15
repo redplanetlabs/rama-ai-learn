@@ -40,8 +40,6 @@ Every phase produces a required artifact. Skipping artifacts leads to wrong PSta
 
 Write-path work (updating an extra precomputed level or denormalized view) happens once per event and is amortized across all future queries. A small increase in write-path work that dramatically reduces read-path seeks is almost always worth it. When evaluating a design, estimate worst-case cost as: (number of seeks × ~0.5ms) + (number of iterated entries × ~5µs).
 
-
-
 ### When to Use the Full Phased Approach
 
 The full Phase 0-4 process applies to **module implementations** — tasks that involve designing depots, PStates, and topologies together.

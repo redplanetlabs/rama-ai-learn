@@ -4,6 +4,10 @@ Stream topologies are event-driven, low-latency, at-least-once (per-event transa
 
 Use stream when: (1) single-digit millisecond update latency is required, or (2) append coordination is needed (stream participates in depot ack, enabling write-then-read-back patterns).
 
+## Scheduling
+
+Once a record's event tree starts, it runs to completion — there is no mechanism to pause, deprioritize, or pace an event tree. Async boundaries free the task thread between segments, but the tree's remaining work executes as soon as resources permit and competes with all other pending events without prioritization. `topology.stream.max.executing.per.task` bounds how many *source records* execute concurrently per task; it does not bound the downstream work a single record generates.
+
 ## Stream retries and exactly-once
 
 A stream topology can retry a record even after all PState writes have completed and committed — if Rama's internal progress tracking fails afterward, the entire record is reprocessed. All writes for that record execute again. This means every write in a stream topology must be either naturally idempotent (e.g., `termval` overwrites) or explicitly deduplicated. Non-idempotent writes (e.g., `AFTER-ELEM` appends, counter increments) will produce duplicates on retry. The burden is on the topology writer to ensure correctness under retry.
@@ -19,6 +23,8 @@ A stream topology can retry a record even after all PState writes have completed
 
 Stream sources bind to **value vars** (`*x`), not fragment vars.
 
+Each `source>` in a `<<sources` block begins an independent dataflow section with its own variable scope — vars bound under one source are not visible under another.
+
 ### Event tree
 
 ```text
@@ -33,6 +39,8 @@ Partition ordering: for any two tasks A, B, if A sends events e₁, e₂, e₃ t
 ### When PState writes commit
 
 In a stream topology, PState writes are committed (replicated and made durable) at **partitioner boundaries**. Each partitioner call causes all pending writes on the current task to commit before moving computation to the next task. Writes between two partitioners form one atomic group.
+
+Reads inside the owning topology see its uncommitted PState writes; readers outside the owning topology — query topologies, foreign reads, other topologies — see only committed state.
 
 This means:
 - Writes before a partitioner are committed before the partitioner executes.

@@ -21,6 +21,7 @@ Read `PLAN.md` first, then fill in each item below. Extract the relevant data fr
 ## Topologies
 - Microbatch unless justified? <yes/no>
 - For each write operation that must be visible in single-digit milliseconds: is it handled by a stream topology? Microbatch has at least 300ms latency and cannot meet single-digit millisecond visibility requirements. <list each low-latency write and its topology — if any uses microbatch, FAIL>
+- For each stream topology: list every processing concern it handles. For each concern, does it actually require stream semantics (millisecond-level update latency or ack coordination with the appender)? If any concern does not require stream, FAIL — that concern belongs in a separate microbatch topology. Multiple topologies can consume the same depot independently or topologies can communicate with an internal depot.
 
 ## Production readiness
 - Does the plan work correctly with multiple concurrent clients? <yes/no — if no, FAIL>
@@ -34,11 +35,40 @@ Read `PLAN.md` first, then fill in each item below. Extract the relevant data fr
   If a non-idempotent write has no resolution, FAIL.
 - For each stream topology that writes to multiple partitions: can a partial failure + retry leave any writes permanently unexecuted? <trace through failure at each partition hop — if yes, FAIL>
 
+## Internal depot usage
+- For each internal depot (`:disallow`): why can't the consuming topology just consume the original client-appended depot directly? An internal depot is only justified when:
+  (a) the consuming topology must wait for the sending topology to complete first (ordering dependency), or
+  (b) the internal depot carries data that is not available in any client-appended depot (e.g., computed/derived values)
+- If neither condition applies, FAIL — remove the internal depot and have the second topology consume the same client-appended depot independently.
+
 ## Cross-topology correctness
 - If data flows between topologies via internal depots: can the sending topology produce duplicate records (e.g., from stream retry)? If so, how does the receiving topology handle duplicates? <list each internal depot flow and dedup mechanism>
 
 ## Stream topology correctness
 - For each `depot-partition-append!` in a stream topology: is there a `(|direct (ops/current-task-id))` immediately before it to force a commit boundary? If no, FAIL. Do NOT reason about whether the receiving topology "will read the data later" — ALWAYS add the commit boundary. See `references/stream.md` "When PState writes commit."
+
+## In-memory state efficiency
+- For each TaskGlobal or in-memory cache, does the plan use compact, flat data structures (primitive arrays) instead of object-heavy structures (TreeMap, HashMap, vectors of maps)?
+- Object-heavy structures create per-entry heap overhead (object headers, pointers, boxed primitives) and produce large object graphs that increase GC pause times. On a latency-sensitive task thread, GC pauses cause latency spikes that propagate to all operations on that task — including unrelated reads and writes. The effect is non-local: one task's GC pause delays every client whose request routes to that task.
+- For each TaskGlobal: FAIL if the data can be partially or fully stored in a compact, flat data structure.
+- Does any TaskGlobal store data that could be fetched from a PState at query time without violating latency requirements? If so, FAIL.
+
+## Minimality — adversarial simplification
+
+Attack the plan as an over-engineering reviewer: actively search for a SIMPLER plan that keeps every required property — fewer depots, fewer topologies, fewer PStates, fewer mechanisms, less logic.
+
+First, sketch in 2–4 sentences the simplest design you can construct that plausibly satisfies the spec. Diff the plan against the sketch: every mechanism in the plan that is absent from the sketch must justify itself below.
+
+For EVERY mechanism in the plan — each depot, topology, query topology, PState, TaskGlobal, and each nontrivial protocol (handoff, flag, counter, cursor, gate) — fill in a block:
+
+### <mechanism name>
+- **Delete it**: what specifically breaks? Name the required property lost, with a verbatim spec/IMPLICIT_SPEC citation. If nothing breaks, or the only thing lost is a property the spec does not require, FAIL — remove it from the plan.
+- **Merge or bypass it**: can it be folded into an existing mechanism, or replaced by doing the work directly where it's triggered? If yes with no required property lost, FAIL — simplify the plan.
+
+Rules:
+- A property the spec does not demand (e.g. exactness beyond stated guarantees) does NOT justify a mechanism.
+- "It is legal/documented" is not a justification — legality is necessary, not sufficient.
+- Indirection is itself a mechanism: if component A could do X directly but instead signals component B to do X, the signaling channel must justify itself.
 
 ## Spec coverage — trace every operation and constraint
 

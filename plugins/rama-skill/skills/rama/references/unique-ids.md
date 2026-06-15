@@ -14,6 +14,12 @@ The choice of where to generate an ID depends on which topologies consume the de
 
 Always use UUID7 over UUID4 when generating UUIDs. UUID7 is time-ordered — IDs sort chronologically, which is useful for range queries on subindexed maps and preserves insertion order. UUID4 is random and does not sort meaningfully.
 
+Time ordering has millisecond granularity: two UUID7s generated within the same millisecond are not ordered by generation order (the remaining bits are random). Don't write code or tests that assume sub-millisecond ordering of UUID7s.
+
+This time ordering holds **in subindexed structures**: subindex sorting is lexicographic on the serialized key, and a UUID's serialized form preserves its bit order, so UUID7 keys in subindexed maps/sets iterate in chronological order. Range queries and cursor pagination over UUID7-keyed subindexed structures are therefore time-ordered.
+
+The on-disk (subindex) ordering of UUID keys is identical to their in-memory ordering (`java.util.UUID` `compareTo`). In-memory structures sorted by UUID comparison — sorted collections, binary searches — agree with subindexed iteration order, so no special comparator is needed when mixing the two.
+
 **Do NOT use `java.util.UUID/randomUUID`.** This generates UUID4. Always use `ops/random-uuid7` instead — it works in both client code and dataflow  (topologies, `deframafn`, `deframaop`).
 
 ```clojure

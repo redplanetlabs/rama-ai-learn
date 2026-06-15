@@ -120,7 +120,7 @@
   "Generates deps.edn content for a challenge."
   [challenge-name]
   (str "{:mvn/repos {\"nexus-releases\" {:url \"https://nexus.redplanetlabs.com/repository/maven-public-releases\"}}
- :deps {com.rpl/rama            {:mvn/version \"0.0.6-SNAPSHOT\"}
+ :deps {com.rpl/rama            {:mvn/version \"1.8.0\"}
         org.clojure/clojure     {:mvn/version \"1.12.4\"}
         rama-challenges/harness {:local/root \"../../lib/harness\"}}
  :paths [\"src\"

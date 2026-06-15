@@ -38,6 +38,16 @@ Adversarially validate the test source against `IMPLICIT_SPEC.md` and the protoc
 
 Emit one of `PHASE_VALIDATION:pass`, `PHASE_VALIDATION:minor-fail`, or `PHASE_VALIDATION:major-fail` as the last non-empty line of your output. The artifact contains the detailed reasoning; the verdict line is what the calling system reads to decide the next move.
 
+## Orchestration routing
+
+This is a three-way verdict phase. The orchestrator uses the verdict to decide what happens next:
+
+- **pass** → proceed to Phase 7 (finish).
+- **minor-fail** → proceed directly to Phase 7 (finish). Phase 7 absorbs the test fix during its iterate loop — no fresh re-invocation of Phase 5, and no re-run of Phase 6. This avoids paying for a full context switch when only localized line edits are needed.
+- **major-fail** → return to Phase 5 (tests) for restructuring. After the fix, Phase 6 re-runs to validate the new test suite.
+
+Up to 3 retry iterations per gate; if the cap is hit, the orchestrator proceeds to Phase 7.
+
 ## Do NOT
 
 - Do NOT default to PASS. The default is `major-fail`.

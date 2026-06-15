@@ -4,11 +4,34 @@ Produce the full module: `defmodule` with depot/PState/topology declarations, ET
 
 ## Inputs
 
-- `<impl-root>/PLAN.md` — the design. Adhere to every decision in it.
+- `<impl-root>/PLAN.md` — the design. No divergences from the plan are allowed unless the plan has a correctness issue or the plan's approach would have much worse performance. "Easier to implement" is NOT a valid reason to diverge.
 - The user-facing spec
 - This skill
 
 ## Steps
+
+
+### Step 0 – Avoid unnecessary complexity
+
+These mistakes waste entire retry cycles. Read and internalize before writing any code:
+
+1. **No type hints on `defn` args.** Primitive type hints on function arguments hit Clojure compiler restrictions (max 4 primitive args, arity conflicts). The performance gain from primitive arg hints is irrelevant in virtually all Rama modules — the bottleneck is always disk I/O and network, never function call overhead. Put type hints on `let` bindings inside the body instead where they enable Java interop without compiler issues.
+   ```clojure
+   ;; WRONG
+   (defn my-fn [^HashMap m ^Long k] (.get m k))
+
+   ;; RIGHT
+   (defn my-fn [m k]
+     (let [^HashMap m m]
+       (.get m k)))
+   ```
+
+2. **No Clojure special forms in dataflow code.** Bodies of `deframafn`, `deframaop`, and `<<sources` blocks are Rama dataflow, not Clojure. Do NOT use `let`, `do`, `fn`, `#()`, `loop`, `if`, `when`, `cond`, or any other Clojure special form/macro. Use the Rama dataflow equivalents (`identity` for binding, `<<if` for branching, etc.). See `references/dataflow.md`.
+
+3. **Use plain `defn` for Java interop helpers, not `deframafn`.** If you need Java method calls, array manipulation, or imperative logic, write a plain `defn` and call it from dataflow.
+
+4. **Do not think about testing in this phase.** This phase writes the module only. How modules are launched and how IPC is created is not relevant here.
+
 
 ### Step 1 — File skeleton
 
@@ -48,7 +71,7 @@ Read `references/dataflow.md` and `references/paths.md`. Read `references/troubl
 **Rama dataflow can express anything you can express in Clojure, just with different syntax.** Do NOT extract logic to plain `defn` helpers because you think dataflow is limited — use the dataflow equivalents instead. See `references/dataflow.md` for the details of how to express logic in dataflow.
 
 For each ETL topology:
-- Bind source: stream `(source> *depot :> *record)`, microbatch `(source> *depot :> %mb)` then `(%mb :> *record)`
+- Bind source: stream `(source> *depot :> *record)`, microbatch `(source> *depot :> %mb)`.
 - After sourcing, you are already on the partition determined by the depot's partitioner. Do NOT add a redundant partitioner call (e.g. `|hash`) if the depot is already partitioned by that key – it wastes time appending the continuation to a queue.
 - Use a partitioner only when you need to relocate computation a different way than the depot partitioner.
 - Write PState: prefer `+compound` with aggregators over `local-transform>` for accumulation patterns. Example:
@@ -62,6 +85,7 @@ For each ETL topology:
   Use `local-transform>` only when you need path control that aggregators don't support (e.g., conditional navigation, `NONE>` deletion).
 - Read PState (colocated): `(local-select> [path] $$pstate :> *val)`
 - For multi-entity updates that span partitions, use partitioner hops within the topology
+- If the module uses tick depots, declare them behind the replaceable-flag conditional shown in `references/testing.md` ("Testing Tick Depots") from the start. An unconditional `declare-tick-depot` makes tick timing untestable and silently breaks any test that relies on the substitution flag.
 
 ### Step 3 — Implement query topologies
 
@@ -124,12 +148,19 @@ Before finishing this phase:
 
 A compile or lint failure surfacing later costs a full retry of downstream phases, so close them out here.
 
+### Step 6 — Self-validate against implementation checklist
+
+Read `references/artifact-impl-validation.md` and go through every check against your module code. Fix any failures directly in the source before finishing this phase. Do NOT produce the `IMPLEMENTATION_VALIDATION.md` artifact — that is Phase 4's job.
+
+In particular, verify plan conformance: compare your implementation's data structures, topology types, and per-entry field choices against what `PLAN.md` specifies. Any divergence that is not justified by a correctness issue must be fixed now.
+
 ## Output
 
-The module source file (e.g. `<impl-root>/src/<name>/module.clj`), fully implemented: declarations + ETL topology bodies + query topology bodies + foreign client wrappers.
+The module source file (e.g. `<impl-root>/src/<name>/module.clj`), fully implemented and self-validated: declarations + ETL topology bodies + query topology bodies + foreign client wrappers.
 
 ## Do NOT
 
 - Do NOT deviate from `PLAN.md`. If the plan needs to change, the right move is to fail this phase, not to silently re-design while implementing.
 - Do NOT extract logic to plain `defn` helpers because you think dataflow is limited.
 - Do NOT add redundant partitioners that match the source partitioner.
+- Do NOT produce `IMPLEMENTATION_VALIDATION.md` in this phase. Self-validate against the checklist but do not write the artifact.

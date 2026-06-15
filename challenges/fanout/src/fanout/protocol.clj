@@ -20,12 +20,12 @@
   (post! [this account-id content]
     "Publish a post by account-id. Each invocation produces one timeline
      entry per follower. It also adds to the timeline of account-id. Visible
-     within 5 milliseconds to the account-id user-timeline (fanout to follower
-     and self timelines may complete asynchronously after that).")
+     within 5 milliseconds to the account-id user-timeline. Fanout to follower
+     and self timelines may complete asynchronously after that and take up to a second
+     (for users who don't have huge number of followers).")
   (get-user-timeline [this account-id]
     "Return every post account-id has ever made as a vector of content
-     strings, in chronological order (oldest first). Must complete within
-     5 milliseconds.")
+     strings, in chronological order (oldest first).")
   (get-timeline-page [this user-id from-post-id]
     "Return up to 20 most recent timeline entries for user-id, most recent
      first, posted before from-post-id (or all if from-post-id is nil). Each
@@ -42,7 +42,9 @@
 
      During normal operation, the work to read a timeline must be FIXED —
      independent of how many accounts user-id follows and how many posts
-     those accounts have made. During normla operation, must complete in roughly 50ms.
+     those accounts have made. During normal operation, must complete in roughly 50ms.
 
-     During cases where where in-memory state must be recovered, like failures or
-     module updates, these latency constraints can be loosened significantly."))
+     During cases where in-memory state must be recovered, like failures or
+     module updates, these latency constraints can be loosened significantly.
+     A recovered timeline may include followee posts made before the follow
+     and may omit entries from accounts unfollowed after delivery."))

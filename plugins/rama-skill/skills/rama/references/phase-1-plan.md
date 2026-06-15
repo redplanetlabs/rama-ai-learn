@@ -81,8 +81,10 @@ For each processing concern, consider:
 A module can have **multiple topologies** of different types. All PState symbols are module-scoped — any topology can read any PState in the module (seeing the last committed value), but only the owning topology can write to it. Use internal depots (`:disallow` + `depot-partition-append!`) to pass data between topologies within the same module.
 
 Topology types:
-- **Microbatch** (default): exactly-once semantics from depot to PState — if a microbatch retries, all PState updates are applied exactly once. Cross-partition atomic writes within a microbatch. However, higher latency than streaming (at least 300ms) and no coordination with depot appends.
+- **Microbatch** (default): exactly-once semantics from depot to PState — if a microbatch retries, all PState updates are applied exactly once. Cross-partition atomic writes within a microbatch. Higher latency than streaming (at least 300ms) and no coordination with depot appends. Microbatch also offers `<<batch` blocks and multi-step processing patterns that stream does not — read `references/microbatch.md` for the full capabilities.
 - **Stream**: low-latency, at-least-once or at-most once. Stream topologies can retry, so non-idempotent writes could produce duplicates.
+
+**Read BOTH `references/microbatch.md` AND `references/stream.md` before choosing topology types.** Do NOT skip either reference — the topology choice must be informed by the full capabilities of both, not just latency.
 
 If the design requires any of these, read the corresponding reference:
 - Unique ID generation either client-side or within topologies → read `references/unique-ids.md`
@@ -98,12 +100,19 @@ cp <skill-root>/references/artifact-plan.md <impl-root>/PLAN.md
 
 Read `references/artifact-plan.md` for the template structure, then fill in `PLAN.md` with the design from Steps 1-4.
 
+### Step 6 — Self-validate before finishing
+
+Read `references/artifact-plan-validation.md` and go through every check against your plan. Fix any failures directly in `PLAN.md` before finishing this phase. Do NOT produce the `PLAN_VALIDATION.md` artifact — that is Phase 2's job. This step catches issues while the full design is in your context, avoiding expensive retry cycles through Phase 2 → Phase 1.
+
+Pay special attention to knock-on effects: when you change one part of the design (e.g., moving a concern to a different topology), re-trace every related operation and constraint to verify the change didn't break something elsewhere (e.g., recovery paths, self-inclusion, synchronization).
+
 ## Output
 
-`<impl-root>/PLAN.md`, fully filled in.
+`<impl-root>/PLAN.md`, fully filled in and self-validated.
 
 ## Do NOT
 
 - Do NOT write any topology, ETL, or query topology implementation code in this phase. Phase 1 is design only.
 - Do NOT skip any section of the plan template.
 - Do NOT commit to the first design that comes to mind for non-obvious decisions. State alternatives, estimate costs, pick.
+- Do NOT produce `PLAN_VALIDATION.md` in this phase. Self-validate against the checklist but do not write the artifact.
