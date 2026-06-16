@@ -936,27 +936,36 @@
      :err @err-fut
      :duration-s duration-s}))
 
+(defn- challenge-dir?
+  "A real challenge directory, identified by a README in plain or encrypted
+  form (the README itself is encrypted during full-challenge encryption)."
+  [d]
+  (or (fs/exists? (fs/path d "README.md"))
+      (fs/exists? (fs/path d "README.md.enc"))))
+
 (defn- encrypt-other-challenges!
-  "Encrypt private files for all challenges except the current one."
+  "Fully encrypt every file in all challenges except the current one, so the
+  challenge under test cannot read another challenge's provided code or
+  reference solution (e.g. the social-graph module that fanout provides)."
   [enc-key project-root current-challenge-name]
   (let [challenge-dirs (fs/list-dir (fs/path project-root "challenges"))]
     (doseq [d challenge-dirs
             :let [name (str (fs/file-name d))]
             :when (and (fs/directory? d)
                        (not= name current-challenge-name)
-                       (fs/exists? (fs/path d "README.md")))]
-      (encrypt-challenge! enc-key name))))
+                       (challenge-dir? d))]
+      (encrypt-challenge-fully! enc-key name))))
 
 (defn- decrypt-other-challenges!
-  "Decrypt private files for all challenges except the current one."
+  "Fully decrypt all challenges except the current one."
   [enc-key project-root current-challenge-name]
   (let [challenge-dirs (fs/list-dir (fs/path project-root "challenges"))]
     (doseq [d challenge-dirs
             :let [name (str (fs/file-name d))]
             :when (and (fs/directory? d)
                        (not= name current-challenge-name)
-                       (fs/exists? (fs/path d "README.md")))]
-      (decrypt-challenge! enc-key name))))
+                       (challenge-dir? d))]
+      (decrypt-challenge-fully! enc-key name))))
 
 ;;; Phase orchestration
 
