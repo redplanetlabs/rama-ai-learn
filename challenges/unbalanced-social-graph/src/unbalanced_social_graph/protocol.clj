@@ -1,15 +1,6 @@
 (ns unbalanced-social-graph.protocol
-  "Protocol and depot record types for the unbalanced-social-graph challenge.
-
-   The depot record types are the wire format for follow/unfollow events.
-   A downstream `fanout` module — and the tests — append these records
-   directly to your follow depot, so they are part of the public contract
-   and must be handled by your module.")
-
-;; Depot record types. Both carry the follower (`account-id`) and the
-;; account being followed (`target-id`). Both are Long.
-(defrecord FollowAccount [account-id target-id])
-(defrecord RemoveFollowAccount [account-id target-id])
+  "Protocol for the unbalanced-social-graph challenge. Tests exercise the
+   module exclusively through this protocol.")
 
 (defprotocol SocialGraph
   "Read/write surface over a social graph. `account-id` and `target-id`

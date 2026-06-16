@@ -34,8 +34,12 @@
             [com.rpl.rama.aggs :as aggs]
             [unbalanced-social-graph.protocol :as p]
             [rama-challenges.harness :as harness])
-  (:import [com.rpl.rama ModuleInstanceInfo]
-           [unbalanced-social-graph.protocol FollowAccount RemoveFollowAccount]))
+  (:import [com.rpl.rama ModuleInstanceInfo]))
+
+;; Internal depot record types — an implementation detail of this module.
+;; Tests never see these; they go through the SocialGraph protocol.
+(defrecord FollowAccount [account-id target-id])
+(defrecord RemoveFollowAccount [account-id target-id])
 
 (def NEW-TASK-CUTOFF 1000)
 
