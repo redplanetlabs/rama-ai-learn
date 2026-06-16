@@ -1,0 +1,60 @@
+# Unbalanced Social Graph Challenge
+
+Build a module that materializes the follower/followee relationships of a
+social graph. The graph is **heavily unbalanced**: most accounts have fewer
+than a hundred followers, but some have millions.
+
+This module exists to be **consumed by a `fanout` module**. When an account
+posts, the fanout module reads that account's followers from your module and
+delivers the post to each one. Fanout runs across every task in the cluster
+and must stay balanced no matter whose post it is processing.
+
+## The property you must satisfy
+
+An unbalanced social graph must be processable in a **balanced** way across
+the cluster. When a post is fanned out to an account's followers, CPU usage
+must be spread roughly evenly across the cluster's tasks — and it must stay
+that way whether the poster is a small account with a handful of followers or
+a celebrity with millions. No single task may become a hotspot.
+
+The fanout module does **not** call the `SocialGraph` protocol. It reads your
+depots and PStates directly. The protocol exists only for the tests in this challenge.
+So you are free to design your depots and PStates however you need to enable balanced fanout.
+
+
+## Contract: `create-module`
+
+Your namespace must provide a `create-module` function returning:
+
+```clojure
+{:module      <RamaModule instance>
+ :wrap-client (fn [ipc] -> <SocialGraph implementation>)}
+```
+
+- `:module` — your module.
+- `:wrap-client` — given a started IPC cluster, returns a reified
+  `unbalanced-social-graph.protocol/SocialGraph` implementation.
+
+## Synchronization: `Synchronizable`
+
+Your `wrap-client` must reify `rama-challenges.harness/Synchronizable`. Tests
+call `(harness/wait-for-processing! client)` after writes, before reads.
+
+## Namespace
+
+Your solution must be in namespace `unbalanced-social-graph.module`.
+
+## File Location
+
+Write your solution to:
+```
+implementations/unbalanced-social-graph/src/unbalanced_social_graph/module.clj
+```
+
+## nREPL
+
+Start an nREPL with the test classpath:
+
+```bash
+clj -M:nrepl
+```
