@@ -70,6 +70,18 @@ Rules:
 - "It is legal/documented" is not a justification — legality is necessary, not sufficient.
 - Indirection is itself a mechanism: if component A could do X directly but instead signals component B to do X, the signaling channel must justify itself.
 
+## Throughput — adversarial
+
+Attack the plan as a throughput reviewer: actively search for a design that sustains higher throughput — lower aggregate resource usage (seeks/iterations summed across all tasks, weighted by each operation's call rate) — while still meeting every latency requirement.
+
+For each frequent operation, sketch the lowest-aggregate-cost design you can construct that still meets its latency target, then diff it against the plan. If the sketch does less total work per operation while staying within latency, FAIL — adopt the cheaper design.
+
+Look for ways to reduce RocksDB seeks or replace seeks with cheaper iterator reads.
+
+Rules:
+- Parallelizing across more tasks lowers latency, not aggregate cost — spreading the same work wider is not a throughput improvement.
+- Meeting the latency target is necessary, not sufficient: among designs that meet it, the one with the lowest aggregate cost wins.
+
 ## Spec coverage — trace every operation and constraint
 
 Enumerate every operation in the protocol/spec AND every constraint, prohibition, invariant, and edge case from the spec and `IMPLICIT_SPEC.md`. For each one, fill in a block below. Do NOT collapse multiple items into one block. Do NOT replace any block with a single-bullet "covered" claim — that bypasses the check.
