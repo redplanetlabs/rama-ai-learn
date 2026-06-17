@@ -23,7 +23,7 @@ For each write, state its partitioner and justify it (see `references/pstate-sch
 - `|hash`: is the keyspace large (many keys per task → negligible hash variance) AND free of any key taking a disproportionate share of events or storage? <if the keyspace is sparse or any key can be hot, FAIL>
 - `|all`: is the data small to hold on every task AND written rarely? <if large or high write throughput, FAIL>
 
-General test — for each frequent read, give its disk cost in seeks + iterator reads, and the single-task baseline: the same data held whole on one task. <if the design's seek count jumps substantially above the baseline, FAIL — design a better partitioning strategy that reduces seeks (such as by finding way to replace them with iterator reads); `|direct` gives full control over placement>
+General test — the partitioning MUST NOT be grossly less disk-efficient than the single-task layout. Take a representative workload and compute the actual totals — **number of seeks and number of iterator reads, summed across all tasks** — for both (a) the partitioned design and (b) the single-task baseline (the same data held whole on one task). State the two side by side. <if the partitioned design's seek total is substantially larger than the baseline's, FAIL — a better partitioning strategy is required.
 
 ## Topologies
 - Microbatch unless justified? <yes/no>

@@ -18,8 +18,8 @@ that way whether the poster is a small account with a handful of followers or
 a celebrity with millions. No single task may become a hotspot.
 
 The fanout module does **not** call the `SocialGraph` protocol. It reads your
-depots and PStates directly. The protocol exists only for the tests in this challenge.
-So you are free to design your depots and PStates however you need to enable balanced fanout.
+depots and PStates directly. So you must design your depots and PStates to enable
+balanced and resource-efficient fanout.
 
 
 ## Contract: `create-module`
