@@ -51,6 +51,38 @@ For each topology, list:
   Fixed or variable: fixed if M is same for all inputs, variable if M differs
   If variable, dynamic approach: ops/explode + aggregator | loop<- | etc. -->
 
+## Partitioning efficiency
+<!-- For the dominant read operation, build the table below at THREE cluster sizes: N = 1, N = 4, and N = 16 tasks. N = 1 is the single-task baseline (all data on one task).
+
+Rows are DATA CATEGORIES — categorizer the data by each input regime, such the table includes all kinds of data, both common and infrequent. "Frequency proportion" is the fraction of operations that hit that category; proportions MUST sum to 1. "Seeks/op" and "iterator reads/op" are the per-operation disk cost for that category at that cluster size.
+
+Fill the table for each N and compute the two weighted sums:
+  Weighted seeks          = Σ(proportion × seeks/op)
+  Weighted iterator reads = Σ(proportion × iterator-reads/op)
+
+### N = 1 task (single-task baseline)
+| Data category | Frequency proportion | Seeks/op | Iterator reads/op |
+|---|---|---|---|
+| <input category 1>  | <0–1> | <#> | <#> |
+| <input category 2>  | <0–1> | <#> | <#> |
+Weighted seeks = <#>   |   Weighted iterator reads = <#>
+
+### N = 4 tasks
+| Data category | Frequency proportion | Seeks/op | Iterator reads/op |
+|---|---|---|---|
+| <input category 1>  | <0–1> | <#> | <#> |
+| <input category 2>  | <0–1> | <#> | <#> |
+Weighted seeks = <#>   |   Weighted iterator reads = <#>
+
+### N = 16 tasks
+| Data category | Frequency proportion | Seeks/op | Iterator reads/op |
+|---|---|---|---|
+| <input category 1>  | <0–1> | <#> | <#> |
+| <input category 2>  | <0–1> | <#> | <#> |
+Weighted seeks = <#>   |   Weighted iterator reads = <#>
+
+If weighted seeks grow substantially from N=1 to N=16, the partitioning is INEFFICIENT — redesign (consider creative `|direct` placement). A good design keeps weighted seeks roughly flat as N grows. -->
+
 ## Design Decisions
 <!-- - Subindexing: which PState collections are subindexed and why
 - Colocation: how depot partitioning aligns with PState keys -->
