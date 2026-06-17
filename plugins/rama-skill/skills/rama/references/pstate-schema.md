@@ -43,6 +43,27 @@ Vectors and sets cannot be top-level. Use `java.util.ArrayList` or
 
 **Nested structures** — maps, sets, and vectors nested inside a first-class schema — are stored as single serialized values by default. Without subindexing, the entire nested structure must be read from and written to disk even for a single-element operation.
 
+## Partitioning control
+
+Reads partition by hash of the key by default (customizable). Writes have no default — a topology routes each write with a partitioner. The choices:
+
+- **`(|hash *k)`** — route to `hash(*k)`. Most commonly appropriate: the same key always lands on the same task (ordered, colocated), and keys spread across tasks with no coordination. Use it unless it can't balance:
+  - **Hash variance** — hashing is balls-into-bins: `M` keys into `N` tasks gives a per-task load of about `M/N ± √(2·(M/N)·ln N)`, so the relative imbalance is roughly `√(2·ln N / (M/N))` — small only when there are *many* keys per task. With few keys per task the busiest task runs several times the average and some tasks sit idle, even though `M > N`. E.g. with `N = 100` tasks: `M = 100` keys → ~37% of tasks empty and the busiest holds ~3–4×; `M = 1,000` → busiest ~2×; `M = 100,000` → within ~10%.
+  - **Per-key skew** — a few keys take far more events or data than the rest; all of a hot key's writes land on its one task, making it a hotspot. Hash balances *keys*, not *load*.
+- **`(|all)`** — route to every task. Appropriate for small, rarely-written data that benefits from being local on every task (e.g. config and lookup tables): each task keeps its own copy, so reads are local with no cross-task hop. Not for large or frequently-written data — every task pays every write.
+- **`(|direct *task-id)`** — route to a specific task you compute. The most flexible option: implement any partitioning scheme. Get the task count from module instance info — wrap the Java call in a function, since interop isn't available inline in dataflow — then compute the target task however you like:
+
+```clojure
+(defn num-tasks ^long [^ModuleInstanceInfo info] (.getNumTasks info))
+
+;; in a topology:
+(ops/module-instance-info :> *info)
+(num-tasks *info :> *n)
+(mod *x *n :> *task-id)        ;; any scheme you choose
+(|direct *task-id)
+(local-transform> [(keypath *k) ...] $$data)
+```
+
 ## Subindexing
 
 **Subindexing** indexes each element of a nested collection separately on disk via RocksDB, just like top-level keys. Subindexed structures can exceed available memory since elements are stored and retrieved individually. Benefits:

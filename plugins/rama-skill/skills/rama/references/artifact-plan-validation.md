@@ -18,6 +18,12 @@ Read `PLAN.md` first, then fill in each item below. Extract the relevant data fr
 - If different instances at the same PState position have different fields, the schema MUST use definterface + defrecord. No exceptions. IPersistentMap, Object, fixed-keys-schema with optional/nil fields, and "justified deviation" are all FAIL. <yes/no – if no, FAIL>
 - Inner collections that can exceed 100 elements subindexed? A collection needs subindexing if ANY instance can grow to have more than 100 elements (e.g., a popular entity). For each non-subindexed inner collection, name the specific code or protocol rule that enforces the size limit. If no enforcement mechanism exists, it is not bounded — subindex it. "Bounded by domain dynamics" or "typically small" without an enforcement mechanism does not count. <yes/no - if no, FAIL>
 
+## Partitioning
+For each write, state its partitioner and justify it (see `references/pstate-schema.md` "Partitioning control"):
+- `|hash`: is the keyspace large (many keys per task → negligible hash variance) AND free of any key taking a disproportionate share of events or storage? <if the keyspace is sparse or any key can be hot, FAIL>
+- `|all`: is the data small to hold on every task AND written rarely? <if large or high write throughput, FAIL>
+- otherwise: does a custom `|direct` scheme keep computation and storage balanced across tasks? <if any key concentrates load or storage on one task, FAIL>
+
 ## Topologies
 - Microbatch unless justified? <yes/no>
 - For each write operation that must be visible in single-digit milliseconds: is it handled by a stream topology? Microbatch has at least 300ms latency and cannot meet single-digit millisecond visibility requirements. <list each low-latency write and its topology — if any uses microbatch, FAIL>
