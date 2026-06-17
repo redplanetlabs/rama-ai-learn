@@ -54,7 +54,13 @@ Do NOT cost contiguous keys in a subindexed sorted structure as N point seeks �
 - **`|all`** when the data is small to hold on every task and written rarely — every task pays every write.
 - **`|direct`** for full control: place data on computed tasks to implement any custom scheme.
 
-The `|hash`/`|all` indicators rule out some bad partitionings but not all — a partitioning can pass them and still waste work. **You MUST find a partitioning strategy that is not grossly less disk-efficient than holding the data whole on a single task.** To check this, take a representative workload and **compute the actual totals — number of seeks and number of iterator reads, summed across all tasks — for both (a) the partitioned design and (b) the single-task baseline** (the same data held whole on one task). Write the two side by side. A large discrepancy in seeks means the partitioning is wasting disk work; you MUST redesign. Consider creative use of `|direct` to remove the discrepancy.
+The `|hash`/`|all` indicators rule out some bad partitionings but not all — a partitioning can pass them and still waste work. **You MUST find a partitioning strategy that is not grossly less disk-efficient than holding the data whole on a single task.** Evaluate this over the whole workload, not a single input:
+
+1. List the distinct operations the system serves, and for each the range of input sizes the spec implies.
+2. Estimate each operation's relative frequency — most calls hit common inputs, a few hit extremes.
+3. For each operation, compute its per-call disk cost in **seeks + iterator reads** under (a) your partitioned design and (b) the single-task baseline (the same data held whole on one task).
+4. Form the **rate-weighted total** for each design: the sum over all operations of (frequency × per-call cost). The most frequent operations dominate this total — a single worst-case input is not a workload.
+5. Compare the two totals. A large discrepancy in seeks means the partitioning is wasting disk work; you MUST redesign. Consider creative use of `|direct` to remove the discrepancy.
 
 **State primitive selection.** PStates are not the only state primitive. For state that does not need durable disk storage (e.g. derived caches that can be rebuilt from durable sources, expensive pre-merged views whose write volume would be prohibitive in a PState), use a TaskGlobal — see `references/task-globals.md`. For each piece of state in the design, decide explicitly:
 - PState: durable, indexed, partitioned. Use when the data is the source of truth or is a derived view whose write volume per source event is bounded by inputs the application controls.
