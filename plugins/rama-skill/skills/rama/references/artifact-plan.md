@@ -54,7 +54,7 @@ For each topology, list:
 ## Partitioning efficiency
 <!-- For the dominant read operation, build the table below at THREE cluster sizes: N = 1, N = 16, and N = 128 tasks. N = 1 is the single-task baseline (all data on one task).
 
-Rows are DATA CATEGORIES — categorizer the data by each input regime, such the table includes all kinds of data, both common and infrequent. "Frequency proportion" is the fraction of operations that hit that category; proportions MUST sum to 1. "Seeks/op" and "iterator reads/op" are the per-operation disk cost for that category at that cluster size.
+Rows are DATA CATEGORIES — categorizer the data by each input regime, so the table includes all kinds of data, both common and infrequent. "Frequency proportion" is the fraction of operations that hit that category; proportions MUST sum to 1. "Seeks/op" and "iterator reads/op" are the per-operation disk cost for that category at that cluster size.
 
 Fill the table for each N and compute the two weighted sums:
   Weighted seeks          = Σ(proportion × seeks/op)

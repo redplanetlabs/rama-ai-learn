@@ -17,6 +17,9 @@ must be spread roughly evenly across the cluster's tasks — and it must stay
 that way whether the poster is a small account with a handful of followers or
 a celebrity with millions. No single task may become a hotspot.
 
+No account follows more than 5,000 others. Posts arrive at roughly 7,000 per
+second, and follows and unfollows at around 100 per second.
+
 The fanout module does **not** call the `SocialGraph` protocol. It reads your
 depots and PStates directly. So you must design your depots and PStates to enable
 balanced and resource-efficient fanout.
