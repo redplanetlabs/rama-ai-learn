@@ -49,10 +49,12 @@ Do NOT commit to the first PState design that comes to mind — PState schema is
 
 Do NOT cost contiguous keys in a subindexed sorted structure as N point seeks — they're a range scan (1 seek + N iter-reads × 5µs), ~100× cheaper than N × 0.5ms. Think through whether a query can be satisifed completely or partially with range scans.
 
-**Choose a partitioning scheme for every write and justify it for both latency and throughput** (see `references/pstate-schema.md` "Partitioning control"):
-- **`|hash`** if the keyspace is large (many keys per task, so hash variance is negligible) AND no single key takes a disproportionate share of events or storage.
-- **`|all`** if the data is small to hold on every task AND written rarely — every task pays every write.
-- otherwise a custom **`|direct`** scheme that keeps computation and storage balanced across tasks.
+**Choose a partitioning scheme for every write and justify it for both latency and throughput** (see `references/pstate-schema.md` "Partitioning control"). Common cases:
+- **`|hash`** when the keyspace is large (many keys per task, so hash variance is negligible) and no single key takes a disproportionate share of events or storage.
+- **`|all`** when the data is small to hold on every task and written rarely — every task pays every write.
+- **`|direct`** for full control: place data on computed tasks to implement any custom scheme.
+
+The `|hash`/`|all` indicators rule out some bad partitionings but not all — a partitioning can pass them and still waste work. The general test: for each frequent read, measure its disk cost in **seeks + iterator reads** and compare to the **single-task baseline** — the same data held whole on one task. A large jump in seek count across all tasks over that baseline means the partitioning is wasting disk work; design a better one with `|direct` to reduce seeks (such as by finding way to replace them with iterator reads).
 
 **State primitive selection.** PStates are not the only state primitive. For state that does not need durable disk storage (e.g. derived caches that can be rebuilt from durable sources, expensive pre-merged views whose write volume would be prohibitive in a PState), use a TaskGlobal — see `references/task-globals.md`. For each piece of state in the design, decide explicitly:
 - PState: durable, indexed, partitioned. Use when the data is the source of truth or is a derived view whose write volume per source event is bounded by inputs the application controls.

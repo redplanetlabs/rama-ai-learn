@@ -19,10 +19,11 @@ Read `PLAN.md` first, then fill in each item below. Extract the relevant data fr
 - Inner collections that can exceed 100 elements subindexed? A collection needs subindexing if ANY instance can grow to have more than 100 elements (e.g., a popular entity). For each non-subindexed inner collection, name the specific code or protocol rule that enforces the size limit. If no enforcement mechanism exists, it is not bounded — subindex it. "Bounded by domain dynamics" or "typically small" without an enforcement mechanism does not count. <yes/no - if no, FAIL>
 
 ## Partitioning
-For each write, state its partitioner and justify it (see `references/pstate-schema.md` "Partitioning control"):
+For each write, state its partitioner and justify it (see `references/pstate-schema.md` "Partitioning control"). These indicators rule out some bad partitionings, not all:
 - `|hash`: is the keyspace large (many keys per task → negligible hash variance) AND free of any key taking a disproportionate share of events or storage? <if the keyspace is sparse or any key can be hot, FAIL>
 - `|all`: is the data small to hold on every task AND written rarely? <if large or high write throughput, FAIL>
-- otherwise: does a custom `|direct` scheme keep computation and storage balanced across tasks? <if any key concentrates load or storage on one task, FAIL>
+
+General test — for each frequent read, give its disk cost in seeks + iterator reads, and the single-task baseline: the same data held whole on one task. <if the design's seek count jumps substantially above the baseline, FAIL — design a better partitioning strategy that reduces seeks (such as by finding way to replace them with iterator reads); `|direct` gives full control over placement>
 
 ## Topologies
 - Microbatch unless justified? <yes/no>
