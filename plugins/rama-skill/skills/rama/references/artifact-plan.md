@@ -52,7 +52,11 @@ For each topology, list:
   If variable, dynamic approach: ops/explode + aggregator | loop<- | etc. -->
 
 ## Partitioning efficiency
-<!-- For the dominant read operation, build the table below at THREE cluster sizes: N = 1, N = 16, and N = 128 tasks. N = 1 is the single-task baseline (all data on one task).
+<!-- FIRST derive the optimal placement, THEN derive the partitioners from it, THEN validate with the table.
+
+**Optimal placement (do this first, before choosing any partitioner).** State the placement the dominant read wants: for each key, the set of task(s) its data should live on — `f(key) → task(s)` — that minimizes total seeks for that read while keeping aggregate load balanced across tasks. THEN derive the partitioner(s) that implement that `f`: `|hash` = `hash(k) mod N`, `|all` = every task, `|direct` = any `f` you compute (see `pstate-schema.md` "Partitioning control"). Do NOT start from a partitioner and ask "is it good enough" — start from `f` and implement it.
+
+**Validate with the table.** For the dominant read operation, build the table below at THREE cluster sizes: N = 1, N = 16, and N = 128 tasks. N = 1 is the single-task baseline (all data on one task).
 
 Rows are DATA CATEGORIES — categorizer the data by each input regime, so the table includes all kinds of data, both common and infrequent. "Frequency proportion" is the fraction of operations that hit that category; proportions MUST sum to 1. "Seeks/op" is the **total number of tasks the operation reads from**, summed across the whole cluster — one local read (seek) per task touched. A read that fans to all N tasks costs **N**, even if some tasks' local slice is empty (the read is still dispatched there). This is a TOTAL across tasks — do NOT count per-task or divide by the task count (a per-task number falls as N grows for any design and measures nothing). "Iterator reads/op" is likewise the total elements iterated across all tasks.
 

@@ -45,13 +45,13 @@ Vectors and sets cannot be top-level. Use `java.util.ArrayList` or
 
 ## Partitioning control
 
-Reads partition by hash of the key by default (customizable). Writes have no default — a topology routes each write with a partitioner. The choices:
+A write lands on whatever task the topology routes to before the `local-transform>` — there is no default placement. So the design question is not "which partitioner do I pick?" but **"what placement do I want?"**: for each key, the set of task(s) its data should live on — a function `f(key) → task(s)`, chosen so the dominant **read's** access pattern is cheap. Derive `f` first, then implement it. The built-in partitioners are just common cases of `f`:
 
-- **`(|hash *k)`** — route to `hash(*k)`. Most commonly appropriate: the same key always lands on the same task (ordered, colocated), and keys spread across tasks with no coordination. Use it unless it can't balance:
+- **`(|hash *k)`** — `f(k) = hash(*k) mod N`, one task per key: the same key always lands on the same task (ordered, colocated), and keys spread across tasks with no coordination. The right `f` for uniform data. It can't balance when:
   - **Hash variance** — hashing is balls-into-bins: `M` keys into `N` tasks gives a per-task load of about `M/N ± √(2·(M/N)·ln N)`, so the relative imbalance is roughly `√(2·ln N / (M/N))` — small only when there are *many* keys per task. With few keys per task the busiest task runs several times the average and some tasks sit idle, even though `M > N`. E.g. with `N = 100` tasks: `M = 100` keys → ~37% of tasks empty and the busiest holds ~3–4×; `M = 1,000` → busiest ~2×; `M = 100,000` → within ~10%.
   - **Per-key skew** — a few keys take far more events or data than the rest; all of a hot key's writes land on its one task, making it a hotspot. Hash balances *keys*, not *load*.
-- **`(|all)`** — route to every task. Appropriate for small, rarely-written data that benefits from being local on every task (e.g. config and lookup tables): each task keeps its own copy, so reads are local with no cross-task hop. Not for large or frequently-written data — every task pays every write.
-- **`(|direct *task-id)`** — route to a specific task you compute. The most flexible option: implement any partitioning scheme. Get the task count from module instance info — wrap the Java call in a function, since interop isn't available inline in dataflow — then compute the target task however you like:
+- **`(|all)`** — `f` = every task: the data lives on all N tasks. The right `f` for small, rarely-written data read locally everywhere (e.g. config and lookup tables) — each task keeps its own copy, so reads are local with no cross-task hop. Not for large or frequently-written data — every task pays every write.
+- **`(|direct *task-id)`** — implements **any** `f`: you compute the task id, so you place a key's data on exactly the task(s) you choose. Get the task count from module instance info — wrap the Java call in a function, since interop isn't available inline in dataflow:
 
 ```clojure
 (defn num-tasks ^long [^ModuleInstanceInfo info] (.getNumTasks info))
@@ -63,6 +63,8 @@ Reads partition by hash of the key by default (customizable). Writes have no def
 (|direct *task-id)
 (local-transform> [(keypath *k) ...] $$data)
 ```
+
+For **skewed** data, do NOT pick the cheapest-looking partitioner off this menu and settle. Derive the `f` the dominant read wants — e.g. *how many tasks should one key's data span as a function of its size?* — and implement it with `|direct`. Starting from `|all` (or `|hash`) and asking "is this good enough?" anchors you on the wrong `f`; start from the ideal placement the access pattern wants and specialize to a built-in only when one is exactly that `f`.
 
 ## Subindexing
 

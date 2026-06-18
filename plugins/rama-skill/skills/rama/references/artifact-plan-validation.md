@@ -69,6 +69,8 @@ Partitioning efficiency — check the `## Partitioning efficiency` table in `PLA
 
 Attack the plan as an over-engineering reviewer: actively search for a SIMPLER plan that keeps every required property — fewer depots, fewer topologies, fewer PStates, fewer mechanisms, less logic.
 
+**Over-engineering is complexity beyond what the *optimal* design requires — not complexity beyond the first design that happens to work.** A mechanism is justified if the most efficient design meeting the spec needs it, even if a cruder, slower, or more wasteful design could omit it. Do NOT strip a mechanism merely because a worse design works without it — efficiency the spec demands is a required property, and a mechanism the optimal design needs to hit it is not over-engineering.
+
 First, sketch in 2–4 sentences the simplest design you can construct that plausibly satisfies the spec. Diff the plan against the sketch: every mechanism in the plan that is absent from the sketch must justify itself below.
 
 For EVERY mechanism in the plan — each depot, topology, query topology, PState, TaskGlobal, and each nontrivial protocol (handoff, flag, counter, cursor, gate) — fill in a block:
@@ -81,6 +83,7 @@ Rules:
 - A property the spec does not demand (e.g. exactness beyond stated guarantees) does NOT justify a mechanism.
 - "It is legal/documented" is not a justification — legality is necessary, not sufficient.
 - Indirection is itself a mechanism: if component A could do X directly but instead signals component B to do X, the signaling channel must justify itself.
+- **No dismissal without construction.** You may not reject an alternative — as "over-engineering," "costlier elsewhere," "immaterial," or "the spec mandates this cost" — until you have CONSTRUCTED it concretely and shown the tradeoff with numbers. A rejection requires a built alternative and a side-by-side cost comparison, not an assertion.
 
 ## Throughput — adversarial
 
@@ -93,6 +96,7 @@ Look for ways to reduce RocksDB seeks or replace seeks with cheaper iterator rea
 Rules:
 - Parallelizing across more tasks lowers latency, not aggregate cost — spreading the same work wider is not a throughput improvement.
 - Meeting the latency target is necessary, not sufficient: among designs that meet it, the one with the lowest aggregate cost wins.
+- **No dismissal without construction.** You may not reject a lower-cost design because it costs more *elsewhere* (more writes, more storage, more mechanism) until you have CONSTRUCTED it and quantified both sides. "It would add writes / be more complex / the spec mandates this cost" is not a rejection — build the alternative, put the numbers side by side, then decide.
 
 ## Spec coverage — trace every operation and constraint
 
