@@ -21,10 +21,8 @@ and must stay balanced no matter whose post it is processing.
 ## The property you must satisfy
 
 An unbalanced social graph must be processable in a **balanced** way across
-the cluster. When a post is fanned out to an account's followers, CPU usage
-must be spread roughly evenly across the cluster's tasks — and it must stay
-that way whether the poster is a small account with a handful of followers or
-a celebrity with millions. No single task may become a hotspot.
+the cluster. Given the distribution above, when many posts are processed concurrently,
+CPU usage across the cluster's tasks must be even.
 
 No account follows more than 5,000 others. Posts arrive at roughly 7,000 per
 second, and follows and unfollows at around 100 per second.
