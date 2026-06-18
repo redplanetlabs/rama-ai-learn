@@ -1,8 +1,17 @@
 # Unbalanced Social Graph Challenge
 
 Build a module that materializes the follower/followee relationships of a
-social graph. The graph is **heavily unbalanced**: most accounts have fewer
-than a hundred followers, but some have millions.
+social graph. The graph is **heavily unbalanced** — follower counts and posting
+rates span orders of magnitude:
+
+| Followers | % of accounts | Avg posts/day |
+|---|---|---|
+| < 100 | 93.6% | 2 |
+| 100 – 1,000 | 6.0% | 3 |
+| 1,000 – 10,000 | 0.35% | 10 |
+| 10,000 – 100,000 | 0.04% | 10 |
+| 100,000 – 1,000,000 | 0.009% | 10 |
+| 1,000,000+ | 0.001% | 10 |
 
 This module exists to be **consumed by a `fanout` module**. When an account
 posts, the fanout module reads that account's followers from your module and
