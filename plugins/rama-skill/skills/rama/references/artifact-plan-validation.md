@@ -27,7 +27,8 @@ Partitioning efficiency — check the `## Partitioning efficiency` table in `PLA
 - Is the table filled in for all three cluster sizes (N = 1, 16, 128)? <if any is missing, FAIL>
 - Does it include every category of input as its own data-category row, including common/typical input, and do the frequency proportions in each table sum to 1? <if all inputs aren't represented or proportions don't sum to 1, FAIL — a single worst-case category is not a workload>
 - Are the weighted sums Σ(proportion × seeks) and Σ(proportion × iterator-reads) computed for each N? <if not, FAIL>
-- Recompute the weighted seeks yourself from the rows. Do weighted seeks grow substantially from N = 1 to N = 128? <if yes, FAIL – a better strategy is required (e.g. creative use of `|direct`)>
+- Is "seeks/op" the TOTAL across all tasks, not per-task? A read that fans to all N tasks MUST be counted as N seeks — every task it dispatches to counts, including ones whose local slice is empty (an empty/bloom-negative probe is still a dispatched read). <if any row counts per-task, divides by the task count, or drops empty probes — telltale signs: an `|all` read listed as 1 seek, or seeks/op that stays flat or FALLS as N grows — FAIL: it must be recounted as total-across-tasks>
+- Recompute the weighted seeks yourself from the rows as TOTALS across all tasks. Do weighted seeks grow substantially from N = 1 to N = 128? <if yes, FAIL – a better strategy is required (e.g. creative use of `|direct`)>
 
 ## Topologies
 - Microbatch unless justified? <yes/no>
