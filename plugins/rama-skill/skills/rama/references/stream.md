@@ -158,7 +158,6 @@ ack-return      = '(ack-return>' expr ')' ;
 | Source with ID (multi-source) | `(source> *depot {:source-id "myId"} :> *data)` |
 | Ack return aggregation | `(source> *depot {:ack-return-agg (combiner +)} :> *data)` |
 | Ack return | `(ack-return> *v)` |
-| Subsource (type dispatch) | `(<<subsource *data TypeA (...) TypeB (...))` |
 
 ### Source options
 

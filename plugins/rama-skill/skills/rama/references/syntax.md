@@ -443,8 +443,7 @@ start-from      = ':end' | ':beginning'
                 | '(offset-after-timestamp-millis' number ')' ;
 unit            = ':records' | ':days' | ':months' ;
 retry-mode      = ':individual' | ':all-after' | ':none' ;
-subsource       = '(<<subsource' var { type-clause } ')' ;
-type-clause     = class-name '(' dataflow-body ')' ;
+
 
 (* microbatch emit: *)
 microbatch-emit = '(' frag-var ':>' binding ')' ;
@@ -459,7 +458,7 @@ microbatch-emit = '(' frag-var ':>' binding ')' ;
 | Ack return aggregation | `(source> *depot {:ack-return-agg (combiner +)} :> *data)` |
 | Microbatch source | `(source> *depot :> %microbatch)` |
 | Emit microbatch items | `(%microbatch :> *data)` |
-| Subsource (type dispatch) | `(<<subsource *data TypeA (...) TypeB (...))` |
+| Subsource (type dispatch) | `(<<subsource *data (case> TypeA :> {:keys [*field1 *field2]}) ...) (case> TypeB) ...)` |
 
 ---
 
