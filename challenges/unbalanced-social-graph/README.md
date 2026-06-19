@@ -1,8 +1,12 @@
 # Unbalanced Social Graph Challenge
 
 Build a module that materializes the follower/followee relationships of a
-social graph. The graph is **heavily unbalanced** — follower counts and posting
-rates span orders of magnitude:
+social graph. Follower counts span orders of magnitude, and **the distribution
+is not fixed** — your module must be near-optimal for **any** social graph
+distribution, not tuned to one. Three it must handle equally well (`%` = share
+of accounts):
+
+**Example A — heavy-tailed (most accounts tiny, a few celebrities):**
 
 | Followers | % of accounts | Avg posts/day |
 |---|---|---|
@@ -13,6 +17,26 @@ rates span orders of magnitude:
 | 100,000 – 1,000,000 | 0.009% | 10 |
 | 1,000,000+ | 0.001% | 10 |
 
+**Example B — mid-heavy (a large share of accounts have 10k–100k followers):**
+
+| Followers | % of accounts | Avg posts/day |
+|---|---|---|
+| < 100 | 25% | 2 |
+| 100 – 1,000 | 20% | 3 |
+| 1,000 – 10,000 | 20% | 10 |
+| 10,000 – 100,000 | 30% | 10 |
+| 100,000 – 1,000,000 | 5% | 10 |
+
+**Example C — flat (accounts spread evenly across sizes):**
+
+| Followers | % of accounts | Avg posts/day |
+|---|---|---|
+| < 100 | 20% | 2 |
+| 100 – 1,000 | 20% | 3 |
+| 1,000 – 10,000 | 20% | 10 |
+| 10,000 – 100,000 | 20% | 10 |
+| 100,000 – 1,000,000 | 20% | 10 |
+
 This module exists to be **consumed by a `fanout` module**. When an account
 posts, the fanout module reads that account's followers from your module and
 delivers the post to each one. Fanout runs across every task in the cluster
@@ -20,9 +44,12 @@ and must stay balanced no matter whose post it is processing.
 
 ## The property you must satisfy
 
-An unbalanced social graph must be processable in a **balanced** way across
-the cluster. Given the distribution above, when many posts are processed concurrently,
-CPU usage across the cluster's tasks must be even.
+When many posts are processed concurrently, CPU usage across the cluster's tasks
+must be even, and the total disk work must be **near-optimal** — within a small
+constant factor of the least work any design could do for the same workload.
+This must hold for **every** distribution above, and any other. A design tuned
+to a single distribution — efficient on one but doing far more work than
+necessary on another — does not satisfy this.
 
 No account follows more than 5,000 others. Posts arrive at roughly 7,000 per
 second, and follows and unfollows at around 100 per second.
