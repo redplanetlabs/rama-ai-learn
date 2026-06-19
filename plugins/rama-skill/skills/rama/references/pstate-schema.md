@@ -72,7 +72,9 @@ For **skewed** data, do NOT pick the cheapest-looking partitioner off this menu 
 - O(1) point lookups into arbitrarily large nested structures
 - Subindexed maps and sets are sorted — efficient range queries
   - Sorting is lexicographic based on the serialized form of the key
+    - Numbers, strings, characters, and keywords sort the same as their in-memory forms
   - UUID7 keys sort in time order (see unique-ids.md)
+  - Top-level keys sort the same way, not just subindexed
 - O(1) size queries (when size tracking is on)
 
 **Critical constraint:** A subindexed structure is NOT a plain value — it is a handle to RocksDB storage. It can be used like a plain data structure, but it cannot be transferred over network boundaries. Queries must always navigate INTO it using element/range navigators (`ALL`, `MAP-VALS`, `MAP-KEYS`, `sorted-map-range`, `sorted-set-range-from-start`, etc.) to access individual elements, which are plain serializable values.
