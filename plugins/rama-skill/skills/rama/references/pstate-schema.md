@@ -64,7 +64,7 @@ A write lands on whatever task the topology routes to before the `local-transfor
 (local-transform> [(keypath *k) ...] $$data)
 ```
 
-For **skewed** data, do NOT pick the cheapest-looking partitioner off this menu and settle. Derive the `f` the dominant read wants — e.g. *how many tasks should one key's data span as a function of its size?* — and implement it with `|direct`. Starting from `|all` (or `|hash`) and asking "is this good enough?" anchors you on the wrong `f`; start from the ideal placement the access pattern wants and specialize to a built-in only when one is exactly that `f`.
+For **skewed** data, do NOT pick the cheapest-looking partitioner off this menu and settle. Derive the `f` the dominant read wants — e.g. *how many tasks should one key's data span as a function of its size?* — and implement it with `|direct`. Starting from `|all` (or `|hash`) and asking "is this good enough?" anchors you on the wrong `f`; start from the ideal placement the access pattern wants and specialize to a built-in only when one is exactly that `f`. Note that `|direct`-placed data remains reachable from other modules — mirror reads route to any source partition with `|direct$$` (see `references/mirrors.md`).
 
 ## Subindexing
 
@@ -238,7 +238,12 @@ Read-only cross-module reference to another module's PState:
 ```
 
 Four args: setup handle, local PState symbol, source module name (string),
-source PState name (string). Queries route to the source module's partitions.
+source PState name (string).
+
+Reads on a mirror are NOT limited to key routing. Mirror partitioners
+(`|hash$$`, `|all$$`, `|direct$$`) give the consuming topology the same
+routing control the owner has. Read `references/mirrors.md`
+before designing any cross-module read contract.
 
 ## Cross-References
 

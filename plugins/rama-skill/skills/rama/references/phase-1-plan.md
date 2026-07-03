@@ -54,6 +54,8 @@ Do NOT cost contiguous keys in a subindexed sorted structure as N point seeks �
 - **`|all`** when the data is small to hold on every task and written rarely — every task pays every write.
 - **`|direct`** for full control: place data on computed tasks to implement any custom scheme.
 
+If another module consumes this module's depots or PStates directly, read `references/mirrors.md` before designing the read contract.
+
 The `|hash`/`|all` indicators rule out some bad partitionings but not all — a partitioning can pass them and still waste work. **You MUST fill in the `## Partitioning efficiency` table in `PLAN.md`** (see the template in `references/artifact-plan.md`): for the dominant read, tabulate seeks/op and iterator-reads/op per **data category** (rows include the common/typical input, with frequency proportions summing to 1) at **N = 1, 16, and 128 tasks** (N = 1 is the single-task baseline), and compute the weighted sums Σ(proportion × seeks) and Σ(proportion × iterator-reads). If weighted seeks grow substantially from N = 1 to N = 128, the partitioning is wasting disk work on the frequent categories — you MUST redesign (consider creative `|direct` placement).
 
 **State primitive selection.** PStates are not the only state primitive. For state that does not need durable disk storage (e.g. derived caches that can be rebuilt from durable sources, expensive pre-merged views whose write volume would be prohibitive in a PState), use a TaskGlobal — see `references/task-globals.md`. For each piece of state in the design, decide explicitly:

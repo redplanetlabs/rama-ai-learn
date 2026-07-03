@@ -119,7 +119,7 @@ If the first line of a query topology is a partitioner, it is evaluated client-s
 - Must be a built-in partitioner (not custom)
 - Must target exactly one task (not `|all`)
 - All inputs must be topology input variables
-- Cannot target a mirror PState partitioner
+- Cannot target a mirror PState partitioner (a restriction on this client-side optimization only — mirror partitioners work normally inside topology bodies)
 
 ## Invocation
 
