@@ -52,7 +52,9 @@ Do NOT cost contiguous keys in a subindexed sorted structure as N point seeks �
 **Choose a partitioning scheme for every write and justify it for both latency and throughput** (see `references/pstate-schema.md` "Partitioning control"). Common cases:
 - **`|hash`** when the keyspace is large (many keys per task, so hash variance is negligible) and no single key takes a disproportionate share of events or storage.
 - **`|all`** when the data is small to hold on every task and written rarely — every task pays every write.
-- **`|direct`** for full control: place data on computed tasks to implement any custom scheme.
+- **`|direct`** for full control: place data on any tasks you choose — computed or stored.
+
+If there is doubt the chosen partitioning is optimal, or cases where it is known not to be, consider placement schemes that store state to assist partitioning, and evaluate every candidate on its TOTAL cost, including the placement state's own reads and writes. Do NOT reject a scheme because storing placement state feels like added complexity — reject only on computed total cost.
 
 If another module consumes this module's depots or PStates directly, read `references/mirrors.md` before designing the read contract.
 

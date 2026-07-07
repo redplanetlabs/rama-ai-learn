@@ -45,7 +45,7 @@ Vectors and sets cannot be top-level. Use `java.util.ArrayList` or
 
 ## Partitioning control
 
-A write lands on whatever task the topology routes to before the `local-transform>` — there is no default placement. So the design question is not "which partitioner do I pick?" but **"what placement do I want?"**: for each key, the set of task(s) its data should live on — a function `f(key) → task(s)`, chosen so the dominant **read's** access pattern is cheap. Derive `f` first, then implement it. The built-in partitioners are just common cases of `f`:
+A write lands on whatever task the topology routes to before the `local-transform>` — there is no default placement. So the design question is not "which partitioner do I pick?" but **"what placement do I want?"**: for each key, the set of task(s) its data should live on — a mapping `f(key) → task(s)`, chosen so the dominant **read's** access pattern is cheap. Derive `f` first, then implement it. `f` need not be a formula over the key — placement can also be stored state, recorded at write time and read back before routing. The built-in partitioners are just common cases of `f`:
 
 - **`(|hash *k)`** — `f(k) = hash(*k) mod N`, one task per key: the same key always lands on the same task (ordered, colocated), and keys spread across tasks with no coordination. The right `f` for uniform data. It can't balance when:
   - **Hash variance** — hashing is balls-into-bins: `M` keys into `N` tasks gives a per-task load of about `M/N ± √(2·(M/N)·ln N)`, so the relative imbalance is roughly `√(2·ln N / (M/N))` — small only when there are *many* keys per task. With few keys per task the busiest task runs several times the average and some tasks sit idle, even though `M > N`. E.g. with `N = 100` tasks: `M = 100` keys → ~37% of tasks empty and the busiest holds ~3–4×; `M = 1,000` → busiest ~2×; `M = 100,000` → within ~10%.
@@ -65,6 +65,8 @@ A write lands on whatever task the topology routes to before the `local-transfor
 ```
 
 For **skewed** data, do NOT pick the cheapest-looking partitioner off this menu and settle. Derive the `f` the dominant read wants — e.g. *how many tasks should one key's data span as a function of its size?* — and implement it with `|direct`. Starting from `|all` (or `|hash`) and asking "is this good enough?" anchors you on the wrong `f`; start from the ideal placement the access pattern wants and specialize to a built-in only when one is exactly that `f`. Note that `|direct`-placed data remains reachable from other modules — mirror reads route to any source partition with `|direct$$` (see `references/mirrors.md`).
+
+Consider candidate `f`s that store state to assist placement, and compare all candidates — stored or computed — on TOTAL cost, the placement state's own reads and writes included. Do NOT reject a stored-placement `f` as "extra bookkeeping" or "added complexity"; reject it only on that computed total cost.
 
 ## Subindexing
 

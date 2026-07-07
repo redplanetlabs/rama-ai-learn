@@ -54,7 +54,7 @@ For each topology, list:
 ## Partitioning efficiency
 <!-- FIRST derive the optimal placement, THEN derive the partitioners from it, THEN validate with the table.
 
-**Optimal placement (do this first, before choosing any partitioner).** State the placement the dominant read wants: for each key, the set of task(s) its data should live on — `f(key) → task(s)` — that minimizes total seeks for that read while keeping aggregate load balanced across tasks. THEN derive the partitioner(s) that implement that `f`: `|hash` = `hash(k) mod N`, `|all` = every task, `|direct` = any `f` you compute (see `pstate-schema.md` "Partitioning control"). Do NOT start from a partitioner and ask "is it good enough" — start from `f` and implement it.
+**Optimal placement (do this first, before choosing any partitioner).** State the placement the dominant read wants: for each key, the set of task(s) its data should live on — `f(key) → task(s)` — that minimizes total seeks for that read while keeping aggregate load balanced across tasks. THEN derive the partitioner(s) that implement that `f`: `|hash` = `hash(k) mod N`, `|all` = every task, `|direct` = any `f` you compute or store (see `pstate-schema.md` "Partitioning control"). Do NOT start from a partitioner and ask "is it good enough" — start from `f` and implement it.
 
 **Validate with the table.** For the dominant read operation, build the table below at THREE cluster sizes: N = 1, N = 16, and N = 128 tasks. N = 1 is the single-task baseline (all data on one task).
 
