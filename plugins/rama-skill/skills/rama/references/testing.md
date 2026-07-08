@@ -113,8 +113,8 @@ completes.
 ```
 
 Blocks until the microbatch topology has processed at least `count`
-depot records since the topology started; throws if not reached within
-the timeout (default 60000 ms).
+depot records since the module was first launched; throws if not
+reached within the timeout (default 60000 ms).
 
 ```clojure
 (foreign-append! depot "a")
@@ -130,7 +130,9 @@ the timeout (default 60000 ms).
 
 The count is the **total** records ever processed by the topology,
 not since the last call — track appends with a counter in the client
-wrapper and pass the running total.
+wrapper and pass the running total. It is tracked for the MODULE, not
+the module instance: it persists across `update-module!` and module
+restarts, so cumulative counters remain valid after an update.
 
 ### Controlling Microbatch Composition
 
