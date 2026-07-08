@@ -70,9 +70,15 @@ CHALLENGE_KEY=<passphrase> bb run-challenges
 # Run a single batch
 CHALLENGE_KEY=<passphrase> bb run-challenges --batch 3
 
-# Run with a specific agent/model
-CHALLENGE_KEY=<passphrase> bb run-challenges --batch 1 --agent claude --model sonnet
+# Run with a specific model
+CHALLENGE_KEY=<passphrase> bb run-challenges --batch 1 --model sonnet
 ```
+
+Each challenge runs as a single `claude -p "/rama-challenge <name>"` session;
+the dynamic workflow (`.claude/workflows/rama-challenge.js`) spawns one
+subagent per phase and handles retry routing internally. Use
+`bb watch-workflow` in a second shell to stream per-phase subagent
+transcripts live.
 
 ### Challenge Encryption
 
@@ -125,17 +131,11 @@ gh api --hostname ghe.internal.redplanetlabs.com repos/rpl/rama-ai-learn/pulls \
 gh api --hostname ghe.internal.redplanetlabs.com repos/rpl/rama-ai-learn/pulls
 ```
 
-## Codex Integration
-
-Codex skills are in `.codex/skills/`. The `rama` symlink points to `skills/rama/SKILL.md`.
-Run challenges with: `bb run-challenges --batch N --agent codex --verbose`
-
 ## Skill Configuration
 
-Both `.claude/skills/`, `.codex/skills/`, `.pi/agent/skills/` and
-`.psi/agent/skills/` are project-local, not in home directories. Shared
-skill content (e.g., `skills/rama/SKILL.md`) is referenced via relative
-symlinks.
+Both `.claude/skills/` and `.agents/skills/` are project-local, not in
+home directories. Shared skill content (e.g.,
+`plugins/rama-skill/skills/rama/`) is referenced via relative symlinks.
 
 ## Architecture
 
@@ -232,7 +232,7 @@ Complete all tasks PLAN.md to get to COMPLETE.
 
 | Task | Description |
 |---|---|
-| `bb run-challenges` | Run coding challenges against an AI agent (`-a claude/codex`, `-m model`, `-r reasoning`, `-b batch`, `-f glob`) |
+| `bb run-challenges` | Run coding challenges via the rama-challenge workflow (`-m model`, `-r reasoning`, `-b batch`, `-f glob`) |
 | `bb run-qa` | Run Q&A challenges against an AI agent (`-a claude/codex`, `-m model`, `-r reasoning`, `-f glob`) |
 
 ### Q&A challenge pipeline
@@ -263,8 +263,9 @@ Complete all tasks PLAN.md to get to COMPLETE.
 
 | Task | Description |
 |---|---|
-| `bb analyze-transcript` | Analyze a challenge transcript file (auto-detects Claude vs Codex) |
+| `python3 scripts/analyze-latest-transcript.py` | Analyze the latest challenge run transcripts under `latest-transcripts/` |
 | `bb format-transcript` | Format a Claude Code JSONL transcript for readable display |
+| `bb watch-workflow` | Stream a running workflow's per-phase subagent transcripts live |
 
 #### Script invocation rule
 

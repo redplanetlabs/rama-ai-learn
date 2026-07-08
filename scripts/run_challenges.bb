@@ -19,9 +19,6 @@
                 :coerce :int}
    :difficulty {:desc "Difficulty filter: standard or hard"
                 :alias :d}
-   :agent      {:desc "Agent to use: claude or codex (default: claude)"
-                :alias :a
-                :default "claude"}
    :model      {:desc "Model to use (e.g. sonnet, opus, haiku)"
                 :alias :m}
    :verbose    {:desc "Stream agent output to console in real time"
@@ -118,7 +115,6 @@
   (println "  -f, --filter GLOB       Glob pattern to match challenge names (e.g. \"basic-*\")")
   (println "  -b, --batch N           Batch number to run (1-5)")
   (println "  -d, --difficulty TYPE   Difficulty filter: standard or hard")
-  (println "  -a, --agent NAME        Agent to use: claude or codex (default: claude)")
   (println "  -m, --model MODEL       Model to use (e.g. sonnet, opus, haiku)")
   (println "  -r, --reasoning LEVEL   Reasoning effort level (e.g. low, medium, high)")
   (println "  -v, --verbose           Stream agent output to console in real time")
@@ -228,34 +224,6 @@
 
 ;;; Output parsing
 
-(defn parse-iterations
-  "Parse the number of test attempts from agent output.
-  Prefers structured CHALLENGE_RESULT line, falls back to heuristics."
-  [output]
-  (if-let [m (re-find #"CHALLENGE_RESULT:.*iterations=(\d+)" output)]
-    (parse-long (second m))
-    (let [attempt-matches (re-seq #"(?i)attempt[s]?\s+(\d+)" output)]
-      (if (seq attempt-matches)
-        (apply max (map #(parse-long (second %)) attempt-matches))
-        1))))
-
-(defn parse-pass-fail
-  "Determine pass/fail from agent exit code and output.
-  Prefers structured CHALLENGE_RESULT line, falls back to heuristics."
-  [exit-code output]
-  (if-let [m (re-find #"CHALLENGE_RESULT:status=(pass|fail)" output)]
-    (keyword (second m))
-    (cond
-      (not= 0 exit-code) :fail
-      (re-find #"(?i)tests?\s+pass" output) :pass
-      (re-find #"(?i)report success" output) :pass
-      (re-find #"(?i)all \d+ tests? (passed|pass)" output) :pass
-      (re-find #"0 failures, 0 errors" output) :pass
-      (re-find #"(?i)attempts?\s*>=?\s*5" output) :fail
-      (re-find #"(?i)stop and report the failure" output) :fail
-      ;; If exit code is 0 and no clear failure signal, assume pass
-      :else :pass)))
-
 (defn parse-workflow-verdict
   "Parse the overall verdict from a rama-challenge workflow run.
   The workflow emits a DONE log line containing 'PASS — test suite green'
@@ -263,20 +231,15 @@
   [output]
   (if (re-find #"PASS — test suite green" output) :pass :fail))
 
-(def score-keys [:alignment :test-alignment])
-
 (defn parse-skills-used
-  "Extract distinct skill names from agent NDJSON output.
-  Handles Claude (Skill tool_use in assistant messages) and
-  Codex (command_execution reading SKILL.md files from skills directories)."
+  "Extract distinct skill names from Claude NDJSON output
+  (Skill tool_use blocks in assistant messages)."
   [output]
   (let [skills (reduce
                 (fn [acc line]
                   (try
                     (let [parsed (json/parse-string line true)]
-                      (cond
-                        ;; Claude: assistant event with Skill tool_use
-                        (= "assistant" (:type parsed))
+                      (if (= "assistant" (:type parsed))
                         (reduce (fn [acc2 block]
                                   (if (and (= "tool_use" (:type block))
                                            (= "Skill" (:name block)))
@@ -284,16 +247,7 @@
                                     acc2))
                                 acc
                                 (get-in parsed [:message :content] []))
-
-                        ;; Codex: command_execution reading a SKILL.md file
-                        (and (= "item.started" (:type parsed))
-                             (= "command_execution" (get-in parsed [:item :type])))
-                        (let [cmd (get-in parsed [:item :command] "")]
-                          (if-let [matches (re-seq #"(?:skills|plugins)/(?:[^/]+/skills/)?([^/]+)/SKILL\.md" cmd)]
-                            (into acc (map second matches))
-                            acc))
-
-                        :else acc))
+                        acc))
                     (catch Exception _ acc)))
                 #{}
                 (remove str/blank? (str/split-lines (or output ""))))]
@@ -301,16 +255,13 @@
 
 (defn parse-skill-refs-used
   "Extract distinct skill reference filenames accessed by the agent.
-  Detects Read/Glob/Grep tool calls whose paths contain references/*.md,
-  and Codex command_execution events reading reference files."
+  Detects Read/Glob/Grep tool calls whose paths contain references/*.md."
   [output]
   (let [refs (reduce
               (fn [acc line]
                 (try
                   (let [parsed (json/parse-string line true)]
-                    (cond
-                      ;; Claude: assistant event with tool_use blocks
-                      (= "assistant" (:type parsed))
+                    (if (= "assistant" (:type parsed))
                       (reduce (fn [acc2 block]
                                 (if (= "tool_use" (:type block))
                                   (let [input (json/generate-string (or (:input block) {}))
@@ -319,64 +270,39 @@
                                   acc2))
                               acc
                               (get-in parsed [:message :content] []))
-
-                      ;; Codex: command_execution reading a reference file
-                      (and (= "item.started" (:type parsed))
-                           (= "command_execution" (get-in parsed [:item :type])))
-                      (let [cmd (get-in parsed [:item :command] "")]
-                        (if-let [matches (re-seq #"references/([a-z_-]+\.md)" cmd)]
-                          (into acc (map second matches))
-                          acc))
-
-                      :else acc))
+                      acc))
                   (catch Exception _ acc)))
               #{}
               (remove str/blank? (str/split-lines (or output ""))))]
     (vec (sort refs))))
 
 (defn parse-tool-uses
-  "Count tool invocations from agent NDJSON output.
-  Handles Claude (assistant events with tool_use content blocks) and
-  Codex (item.started with item.type=command_execution) event formats."
+  "Count tool invocations from Claude NDJSON output
+  (assistant events with tool_use content blocks)."
   [output]
   (reduce
    (fn [acc line]
      (try
        (let [parsed (json/parse-string line true)]
-         (cond
-           ;; Claude: assistant event with tool_use items in message.content
-           (= "assistant" (:type parsed))
+         (if (= "assistant" (:type parsed))
            (+ acc (count (filter #(= "tool_use" (:type %))
                                  (get-in parsed [:message :content] []))))
-           ;; Codex: item.started with command_execution item
-           (and (= "item.started" (:type parsed))
-                (= "command_execution" (get-in parsed [:item :type])))
-           (inc acc)
-           :else acc))
+           acc))
        (catch Exception _ acc)))
    0
    (remove str/blank? (str/split-lines (or output "")))))
 
 (defn extract-usage-from-result
-  "Extract token usage from a parsed JSON event map.
-  Handles Claude's result-type events and Codex's turn.completed events.
+  "Extract token usage from a parsed Claude result-type event map.
   Returns a usage map or nil if the event has no usage."
   [parsed]
   (when-let [usage (:usage parsed)]
-    (condp = (:type parsed)
-      ;; Claude: {"type":"result","usage":{"input_tokens":...,"cache_creation_input_tokens":...,...}}
-      "result"
+    ;; Claude: {"type":"result","usage":{"input_tokens":...,"cache_creation_input_tokens":...,...}}
+    (when (= "result" (:type parsed))
       {:input-tokens          (get usage :input_tokens 0)
        :output-tokens         (get usage :output_tokens 0)
        :cache-creation-tokens (get usage :cache_creation_input_tokens 0)
-       :cache-read-tokens     (get usage :cache_read_input_tokens 0)}
-      ;; Codex: {"type":"turn.completed","usage":{"input_tokens":...,"cached_input_tokens":...,...}}
-      "turn.completed"
-      {:input-tokens          (get usage :input_tokens 0)
-       :output-tokens         (get usage :output_tokens 0)
-       :cache-creation-tokens 0
-       :cache-read-tokens     (get usage :cached_input_tokens 0)}
-      nil)))
+       :cache-read-tokens     (get usage :cache_read_input_tokens 0)})))
 
 (defn parse-token-usage
   "Parse token usage from Claude's JSON or NDJSON output.
@@ -430,11 +356,9 @@
 
 (defn save-transcript!
   "Save JSONL agent output to ../transcripts relative to project-root.
-  Filename: {date}-{time}-{agent}[-{model}][-{reasoning}]-{challenge}-phase{N}[-attempt{K}].jsonl
-  All transcripts of one challenge run share the same {date}-{time} prefix
-  (the run-start-time), so they can be grouped as a unit. Returns the path written."
-  [project-root agent-name model reasoning challenge-name content
-   phase-id attempt run-start-time]
+  Filename: {date}-{time}-{agent}[-{model}][-{reasoning}]-{challenge}.jsonl
+  The {date}-{time} prefix comes from run-start-time. Returns the path written."
+  [project-root agent-name model reasoning challenge-name content run-start-time]
   (let [t               (or run-start-time (java.time.LocalDateTime/now))
         date-str        (.format t (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd"))
         time-str        (.format t (java.time.format.DateTimeFormatter/ofPattern "HHmmss"))
@@ -443,11 +367,7 @@
                           (and model reasoning) (format "%s-%s-%s-%s-%s" date-str time-str agent-name model reasoning)
                           model                 (format "%s-%s-%s-%s" date-str time-str agent-name model)
                           :else                 (format "%s-%s-%s" date-str time-str agent-name))
-        phase-suffix    (cond
-                          (and phase-id (> attempt 1)) (format "-phase%d-attempt%d" phase-id attempt)
-                          phase-id                     (format "-phase%d" phase-id)
-                          :else                        "")
-        filename        (str base "-" challenge-name phase-suffix ".jsonl")
+        filename        (str base "-" challenge-name ".jsonl")
         path            (str (fs/path transcripts-dir filename))]
     (fs/create-dirs transcripts-dir)
     (spit path content)
@@ -996,7 +916,7 @@
             skills-used (parse-skills-used out)
             skill-refs-used (parse-skill-refs-used out)
             transcript-path (save-transcript! project-root agent-name model reasoning
-                                              challenge-name out nil nil run-start-time)]
+                                              challenge-name out run-start-time)]
 
         (when *verbose*
           (println (format "  Workflow finished: exit=%d duration=%ds status=%s"
@@ -1419,7 +1339,7 @@
                 (println "Including Batch 5 challenges with hidden setup."))
             valid-challenges (concat local cluster-with-setup (if cluster-available cluster-without-setup []))
             {:keys [valid missing]} (validate-challenges (vec valid-challenges) project-root)
-            agent-name (or (:agent opts) "claude")
+            agent-name "claude"
             model (:model opts)
             reasoning (:reasoning opts)]
 

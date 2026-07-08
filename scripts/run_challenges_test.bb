@@ -105,25 +105,6 @@
                 :output-tokens 5
                 :cache-creation-tokens 22042
                 :cache-read-tokens 0}
-               (parse-token-usage output)))))
-
-    (testing "when given Codex JSONL with turn.completed events"
-      (let [output (str "{\"type\":\"thread.started\",\"thread_id\":\"abc\"}\n"
-                        "{\"type\":\"turn.started\"}\n"
-                        "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\"output_tokens\":50}}\n")]
-        (is (= {:input-tokens 100
-                :output-tokens 50
-                :cache-creation-tokens 0
-                :cache-read-tokens 40}
-               (parse-token-usage output)))))
-
-    (testing "when given Codex JSONL with multiple turn.completed events"
-      (let [output (str "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"cached_input_tokens\":40,\"output_tokens\":50}}\n"
-                        "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":200,\"cached_input_tokens\":80,\"output_tokens\":75}}\n")]
-        (is (= {:input-tokens 300
-                :output-tokens 125
-                :cache-creation-tokens 0
-                :cache-read-tokens 120}
                (parse-token-usage output)))))))
 
 (deftest token-totals-test
@@ -169,15 +150,6 @@
     (testing "when no skills are used"
       (let [output "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{}}]}}"]
         (is (= [] (parse-skills-used output)))))
-    (testing "when Codex reads SKILL.md from skills directory"
-      (let [output (str "{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc \\\"sed -n '1,220p' .codex/skills/rama-challenges/SKILL.md\\\"\"}}\n"
-                        "{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc \\\"sed -n '1,260p' plugins/rama-skill/skills/rama/SKILL.md\\\"\"}}\n"
-                        "{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc \\\"sed -n '1,240p' plugins/rama-skill/skills/rama-app-design/SKILL.md\\\"\"}}\n")]
-        (is (= ["rama" "rama-app-design" "rama-challenges"] (parse-skills-used output)))))
-    (testing "when Codex reads same skill multiple times"
-      (let [output (str "{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc \\\"sed -n '1,260p' plugins/rama-skill/skills/rama/SKILL.md\\\"\"}}\n"
-                        "{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc \\\"sed -n '680,760p' plugins/rama-skill/skills/rama/SKILL.md\\\"\"}}\n")]
-        (is (= ["rama"] (parse-skills-used output)))))
     (testing "when given empty input"
       (is (= [] (parse-skills-used ""))))
     (testing "when given nil input"
@@ -207,9 +179,6 @@
     (testing "when no references are accessed"
       (let [output "{\"type\":\"assistant\",\"message\":{\"content\":[{\"type\":\"tool_use\",\"name\":\"Read\",\"input\":{\"file_path\":\"/project/src/my/module.clj\"}}]}}\n"]
         (is (= [] (parse-skill-refs-used output)))))
-    (testing "when Codex reads a reference file"
-      (let [output "{\"type\":\"item.started\",\"item\":{\"type\":\"command_execution\",\"command\":\"/bin/zsh -lc \\\"cat plugins/rama-skill/skills/rama/references/testing.md\\\"\"}}\n"]
-        (is (= ["testing.md"] (parse-skill-refs-used output)))))
     (testing "when given empty input"
       (is (= [] (parse-skill-refs-used ""))))
     (testing "when given nil input"
@@ -427,15 +396,15 @@
   ;; :reasoning "LEVEL" in the opts map.
   (testing "--reasoning CLI option"
     (testing "when --reasoning is passed"
-      (let [opts (cli/parse-opts ["--reasoning" "high" "--agent" "claude"] {:spec cli-spec})]
+      (let [opts (cli/parse-opts ["--reasoning" "high"] {:spec cli-spec})]
         (is (= "high" (:reasoning opts))
             "should set :reasoning to the provided value")))
     (testing "when -r short form is passed"
-      (let [opts (cli/parse-opts ["-r" "low" "--agent" "claude"] {:spec cli-spec})]
+      (let [opts (cli/parse-opts ["-r" "low"] {:spec cli-spec})]
         (is (= "low" (:reasoning opts))
             "should set :reasoning via alias")))
     (testing "when --reasoning is not passed"
-      (let [opts (cli/parse-opts ["--agent" "claude"] {:spec cli-spec})]
+      (let [opts (cli/parse-opts [] {:spec cli-spec})]
         (is (nil? (:reasoning opts))
             "should leave :reasoning absent")))))
 
@@ -466,9 +435,7 @@
 
 (deftest save-transcript-test
   ;; Tests that save-transcript! writes content under ../transcripts relative
-  ;; to project root, encodes phase-id and (when > 1) attempt in the filename,
-  ;; and uses run-start-time for the {date}-{time} prefix so all transcripts of
-  ;; one challenge run share that prefix.
+  ;; to project root and uses run-start-time for the {date}-{time} prefix.
   (testing "save-transcript!"
     (let [tmp-root (str (babashka.fs/create-temp-dir))
           project-dir (str (babashka.fs/path tmp-root "project"))
@@ -477,30 +444,25 @@
       (try
         (testing "writes content and returns path"
           (let [path (save-transcript! project-dir "claude" nil nil "my-challenge"
-                                       "jsonl content" 0 1 run-start)]
+                                       "jsonl content" run-start)]
             (is (= "jsonl content" (slurp path)))
-            (is (re-find #"my-challenge-phase0\.jsonl$" path))))
+            (is (re-find #"-my-challenge\.jsonl$" path))))
         (testing "path is under ../transcripts"
-          (let [path (save-transcript! project-dir "claude" nil nil "ch" "x" 0 1 run-start)
+          (let [path (save-transcript! project-dir "claude" nil nil "ch" "x" run-start)
                 expected-dir (-> (babashka.fs/path project-dir ".." "transcripts")
                                  babashka.fs/normalize str)
                 actual-dir   (-> path babashka.fs/parent babashka.fs/normalize str)]
             (is (= expected-dir actual-dir))))
         (testing "includes model in filename when provided"
-          (let [path (save-transcript! project-dir "claude" "sonnet" nil "ch" "x" 0 1 run-start)]
-            (is (re-find #"-claude-sonnet-ch-phase0\.jsonl$" path))))
+          (let [path (save-transcript! project-dir "claude" "sonnet" nil "ch" "x" run-start)]
+            (is (re-find #"-claude-sonnet-ch\.jsonl$" path))))
         (testing "includes model and reasoning in filename when both provided"
-          (let [path (save-transcript! project-dir "claude" "sonnet" "high" "ch" "x" 0 1 run-start)]
-            (is (re-find #"-claude-sonnet-high-ch-phase0\.jsonl$" path))))
-        (testing "encodes phase-id and attempt when attempt > 1"
-          (let [path (save-transcript! project-dir "claude" nil nil "ch" "x" 3 2 run-start)]
-            (is (re-find #"-ch-phase3-attempt2\.jsonl$" path))))
-        (testing "all phases of one run share the {date}-{time} prefix"
-          (let [p0 (save-transcript! project-dir "claude" nil nil "ch" "x" 0 1 run-start)
-                p3 (save-transcript! project-dir "claude" nil nil "ch" "x" 3 1 run-start)
-                prefix (fn [p] (-> p babashka.fs/file-name str
-                                   (clojure.string/replace #"-ch-phase\d+(-attempt\d+)?\.jsonl$" "")))]
-            (is (= (prefix p0) (prefix p3)))))
+          (let [path (save-transcript! project-dir "claude" "sonnet" "high" "ch" "x" run-start)]
+            (is (re-find #"-claude-sonnet-high-ch\.jsonl$" path))))
+        (testing "uses run-start-time for the {date}-{time} prefix"
+          (let [fixed (java.time.LocalDateTime/of 2026 1 2 3 4 5)
+                path (save-transcript! project-dir "claude" nil nil "ch" "x" fixed)]
+            (is (re-find #"2026-01-02-030405-claude-ch\.jsonl$" path))))
         (finally
           (babashka.fs/delete-tree tmp-root))))))
 

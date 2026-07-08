@@ -10,7 +10,7 @@ For the project's motivation, design, and progress updates, see [the blog post s
 
 - `challenges/` — implementation challenges, each one a Rama module the agent has to build from a protocol contract.
 - `plugins/rama-skill/skills/rama/` — the Rama skill content (an [agentskills.io](http://agentskills.io/)-format skill).
-- `scripts/run_challenges.bb` — the orchestration runner that drives an agent through a challenge.
+- `scripts/run_challenges.bb` — the runner that executes each challenge as a single `claude -p "/rama-challenge <name>"` session; the dynamic workflow (`.claude/workflows/rama-challenge.js`) spawns one subagent per phase and routes retries internally.
 - `scripts/docker-*.sh` — Docker harness for running challenges in an isolated container.
 - `scripts/analyze-latest-transcript.py` — tooling for inspecting transcripts after a run.
 
@@ -40,7 +40,7 @@ The `CHALLENGE_KEY` environment variable encrypts reference solutions and privat
 CHALLENGE_KEY=<passphrase> bb run-challenges -f auction-module -m claude-opus-4-6 -r high -p
 ```
 
-Each run produces one transcript per phase under `latest-transcripts/`.
+Each run produces a top-level session transcript plus a `wf_*` directory of per-phase subagent transcripts (`agent-*.jsonl` and a `journal.jsonl`), copied under `latest-transcripts/` after Docker runs. While a run is in progress, `bb watch-workflow` streams the per-phase subagent transcripts live from a second shell.
 
 
 ## Docker workflow
