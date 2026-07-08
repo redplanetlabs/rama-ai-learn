@@ -162,6 +162,10 @@ Use `invoke-query` with the mirror var. Identical to colocated invocation.
 (invoke-query *mirror-query *arg :> *result)
 ```
 
+### Discovering the source module's task count
+
+A consumer that computes `|direct$$` targets may need the source module's task count. The source module exposes it via a query topology (`ops/module-instance-info` → `.getNumTasks`); the consumer caches it in a TaskGlobal — if the cache is empty, invoke the mirror query and fill it, otherwise use the cached value.
+
 ## Ack semantics with mirrors
 
 ```text
