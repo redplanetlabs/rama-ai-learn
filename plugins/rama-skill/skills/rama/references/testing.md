@@ -105,7 +105,16 @@ on PStates immediately after appends.
 
 Microbatch processing is asynchronous to depot appends. Use
 `wait-for-microbatch-processed-count` to block until processing
-completes. Accepts an optional `timeout-millis` (throws on timeout).
+completes.
+
+```clojure
+(rtest/wait-for-microbatch-processed-count ipc module-name topology-name count)
+(rtest/wait-for-microbatch-processed-count ipc module-name topology-name count timeout-millis)
+```
+
+Blocks until the microbatch topology has processed at least `count`
+depot records since the topology started; throws if not reached within
+the timeout (default 60000 ms).
 
 ```clojure
 (foreign-append! depot "a")
@@ -120,7 +129,8 @@ completes. Accepts an optional `timeout-millis` (throws on timeout).
 ```
 
 The count is the **total** records ever processed by the topology,
-not since the last call.
+not since the last call — track appends with a counter in the client
+wrapper and pass the running total.
 
 ### Controlling Microbatch Composition
 

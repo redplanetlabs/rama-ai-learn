@@ -10,6 +10,8 @@ Microbatch topologies provide exactly-once PState updates, cross-partition atomi
 
 Microbatch sources bind to **fragment vars** (`%mb`), not value vars. The fragment var represents the current batch of records across all tasks. Emitting from it with `(%mb :> *record)` iterates over all records in this microbatch on every task where records landed.
 
+`%mb` emits per task, in depot append order: each task emits its local depot partition's records in the order they were appended.
+
 Each `source>` in a `<<sources` block begins an independent dataflow section with its own variable scope — vars bound under one source are not visible under another.
 
 ```clojure

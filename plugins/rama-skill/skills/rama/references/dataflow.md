@@ -153,6 +153,8 @@ Each of these prints three times.
 
 Because tasks are single-threaded, long-running synchronous work blocks all other processing on that task. Two tools allow topology code to yield the task thread cooperatively:
 
+**Yielding and ordering.** A topology event's writes (all code between partitioners) are atomic — yielding does not change that. What yielding gives up is *ordering*: while an event is suspended at a yield point, later-queued events on the task execute, so events no longer complete in arrival order. Events that yield at the same points do keep their relative order — suspended events resume in the order they yielded. Do NOT yield on a path where correctness depends on same-key events processing in order.
+
 ### yield-if-overtime
 
 `(yield-if-overtime)` checks if the current event has exceeded `worker.event.target.max.millis` (default 5ms). If so, it suspends the current event and lets other pending events run. The suspended event resumes later on the same task.
