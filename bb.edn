@@ -37,8 +37,12 @@
              ((resolve '-main) *command-line-args*))}
 
   format-transcript
-  {:doc "Format a Claude Code JSONL transcript for readable display"
+  {:doc "Format a Claude Code JSONL transcript (file arg) or live stream (pipe stream-json into '-')"
    :task (do (load-file "scripts/format_transcript.bb") ((resolve '-main) *command-line-args*))}
+
+  watch-workflow
+  {:doc "Stream a running dynamic-workflow's per-phase subagent transcripts live"
+   :task (do (load-file "scripts/watch_workflow.bb") ((resolve '-main) *command-line-args*))}
 
   encrypt-challenges
   {:doc "Encrypt test-resources and test-private files (CHALLENGE_KEY env var required)"

@@ -1,21 +1,46 @@
 #!/usr/bin/env python3
-"""Analyze a challenge transcript for common patterns.
+"""Analyze transcripts from the latest challenge run.
 
 Usage:
-  python3 scripts/analyze-latest-transcript.py [--phase N [--attempt K]] [command] [args...]
+  python3 scripts/analyze-latest-transcript.py [--phase P [--attempt K]] [command] [args...]
 
-Transcript selection:
-  Default:                       reads latest-transcript.jsonl in the repo root.
-  --phase N:                     reads the latest attempt of phase N from
-                                 latest-transcripts/ (highest-numbered attempt).
-  --phase N --attempt K:         reads exactly attempt K of phase N. attempt 1 is
-                                 the file without `-attempt` in the name.
+Transcript layout (auto-detected):
+  latest-transcripts/ is populated by `bash scripts/docker-copy-transcript.sh`.
+  Override the directory with the TRANSCRIPTS_DIR environment variable.
 
-  Populate `latest-transcripts/` with `bash scripts/docker-copy-transcript.sh`
-  (default mode copies all transcripts of the most recent run).
+  Workflow mode:  latest-transcripts/ contains a wf_* directory holding
+                  per-phase subagent transcripts (agent-*.jsonl) plus
+                  journal.jsonl (started/result events per agentId, in
+                  execution order). The loose *.jsonl next to it is the
+                  top-level session transcript.
+  Legacy mode:    latest-transcripts/ contains flat *-phaseN[-attemptK].jsonl
+                  files. Without --phase, reads latest-transcript.jsonl in
+                  the repo root.
+
+Phase selection:
+  --phase P                Select one phase.
+                           Workflow mode: P is the phase number parsed from the
+                             "THIS PHASE:" line of each agent's prompt. Retries
+                             of a phase produce multiple agents; default is the
+                             LAST attempt in journal order. Older workflow runs
+                             may also match `P.lens` (reviewer) or `scribe-P`.
+                           Legacy mode: reads *-phaseP*.jsonl (highest attempt).
+  --attempt K              Pick attempt K of the phase (1-based).
+                           Workflow mode: Kth agent with that phase number in
+                             journal order.
+                           Legacy mode: attempt 1 is the file without
+                             `-attempt` in the name.
+
+  Without --phase, workflow-mode commands operate on ALL phase agents
+  concatenated in journal order (so module/final-write replay Write + Edits
+  across every phase — any phase can edit module.clj).
 
 Commands:
-  summary              - Run result, cost, duration, turn count
+  summary              - Workflow mode: per-agent one-liner table (phase,
+                         attempt, duration, size, verdict) + final result;
+                         with --phase, duration/cost/turns/stop/result for
+                         that agent. Legacy mode: run result, cost, duration,
+                         turn count.
   plan                 - Show PLAN.md content
   validation           - Show PLAN_VALIDATION.md content
   implicit-spec        - Show IMPLICIT_SPEC.md content
@@ -24,8 +49,8 @@ Commands:
   errors               - Show all compilation/test errors
   thinking <query>     - Search thinking blocks for a keyword/phrase
   thinking-blocks      - Show raw structure of every thinking block
-  reasoning            - Show REASONING.md appends made during the transcript
-  confusions           - Show only CONFUSION entries from REASONING.md appends
+  reasoning            - Show reasoning-log appends (REASONING.md or reasoning/phaseN-attemptK.md)
+  confusions           - Show only CONFUSION entries from reasoning-log appends
   writes <query>       - Search Write tool calls for a keyword
   edits <query>        - Search Edit tool calls for a keyword
   module               - Show the final module.clj content (replays Write + Edits)
@@ -38,8 +63,10 @@ Commands:
   timeline             - Show high-level timeline of actions
   tool-results <query> - Search tool result content for a keyword
   search <query>       - Search ALL content (text, thinking, tool use, tool results) for a keyword
-  run-overview         - Table of all transcripts in latest-transcripts/ sorted by start
-                         time, with duration and gap-before for each phase
+  run-overview         - Workflow mode: table of all phase agents in journal
+                         order with start/end/duration and gap-before.
+                         Legacy mode: table of all transcripts in
+                         latest-transcripts/ sorted by start time.
 """
 
 import json
@@ -47,13 +74,15 @@ import sys
 import re
 import os
 import glob
+from datetime import datetime
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_TRANSCRIPT = os.path.join(REPO_ROOT, 'latest-transcript.jsonl')
-LATEST_TRANSCRIPTS_DIR = os.path.join(REPO_ROOT, 'latest-transcripts')
+LATEST_TRANSCRIPTS_DIR = os.environ.get(
+    'TRANSCRIPTS_DIR', os.path.join(REPO_ROOT, 'latest-transcripts'))
 
 def resolve_transcript_path(phase=None, attempt=None):
-    """Resolve which transcript file to read.
+    """Resolve which transcript file to read (legacy flat layout).
 
     - phase=None: returns latest-transcript.jsonl in the repo root.
     - phase=N: finds *-phase{N}*.jsonl in latest-transcripts/.
@@ -106,7 +135,7 @@ def load(path=None):
     if path is None:
         path = DEFAULT_TRANSCRIPT
     with open(path) as f:
-        return [json.loads(l) for l in f]
+        return [json.loads(l) for l in f if l.strip()]
 
 def cmd_summary(lines, args):
     for line in lines:
@@ -167,6 +196,8 @@ def _final_file_content(lines, name, require=None):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             if block.get('type') != 'tool_use':
                 continue
             t = block.get('name')
@@ -202,6 +233,8 @@ def _final_module_content(lines):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             if block.get('type') == 'tool_use' and block.get('name') in ('Write', 'Edit'):
                 fp = block.get('input', {}).get('file_path', '')
                 if 'module.clj' in fp and 'implementation' in fp:
@@ -222,6 +255,8 @@ def _show_write(lines, name, require=None, last_only=False):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             if block.get('type') == 'tool_use' and block.get('name') == 'Write':
                 fp = block.get('input', {}).get('file_path', '')
                 if name in fp and (require is None or require in fp):
@@ -238,6 +273,8 @@ def cmd_errors(lines, args):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             if block.get('type') == 'tool_result':
                 c = block.get('content', '')
                 if isinstance(c, str) and any(kw in c for kw in ['FAIL in', 'ERROR in', 'Syntax error', 'Unable to resolve', 'CompilerException', 'ClassCastException', 'NullPointerException', 'IllegalArgumentException']):
@@ -256,6 +293,8 @@ def cmd_thinking(lines, args):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             if block.get('type') == 'thinking':
                 text = block.get('thinking', '')
                 if not text:
@@ -269,33 +308,41 @@ def cmd_thinking(lines, args):
                     print(text[start:end])
                     print()
 
+# Matches both reasoning-log layouts: the legacy shared REASONING.md and the
+# workflow-mode per-agent files (implementations/<ch>/reasoning/phaseN-attemptK.md).
+_REASONING_PATH_RE = re.compile(r'REASONING\.md|reasoning/phase\d+-attempt\d+\.md')
+
 def _reasoning_appends(lines):
-    """Yield (line_index, label, text) for every REASONING.md append in the
-    transcript: Bash heredoc/echo appends plus Write/Edit tool calls."""
+    """Yield (line_index, label, text) for every reasoning-log append in the
+    transcript (legacy REASONING.md or per-agent reasoning/ files): Bash
+    heredoc/echo appends plus Write/Edit tool calls."""
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             if block.get('type') != 'tool_use':
                 continue
             name = block.get('name')
             inp = block.get('input', {})
             if name == 'Bash':
                 cmd = inp.get('command', '')
-                if 'REASONING.md' not in cmd:
+                if not _REASONING_PATH_RE.search(cmd):
                     continue
                 m = re.search(r"<<\s*'?(\w+)'?\n(.*?)\n\1", cmd, re.DOTALL)
                 yield (i, 'Bash', m.group(2) if m else cmd)
             elif name in ('Write', 'Edit'):
                 fp = inp.get('file_path', '')
-                if 'REASONING.md' not in fp:
+                if not _REASONING_PATH_RE.search(fp):
                     continue
                 content = inp.get('content') or inp.get('new_string', '')
                 yield (i, f"{name} {fp}", content)
 
 def cmd_reasoning(lines, args):
-    """Show REASONING.md appends made during this transcript. Phase sentinels
-    are written by the runner (not the agent), so attribute entries to phases
-    by running this per-phase via --phase N."""
+    """Show reasoning-log appends made during this transcript. Legacy runs use
+    a shared REASONING.md (attribute entries to phases by running per-phase via
+    --phase N); workflow runs use per-agent reasoning/phaseN-attemptK.md files,
+    which are self-attributing."""
     found = False
     for i, label, text in _reasoning_appends(lines):
         found = True
@@ -303,10 +350,10 @@ def cmd_reasoning(lines, args):
         print(text)
         print()
     if not found:
-        print("(no REASONING.md activity in this transcript)")
+        print("(no reasoning-log activity in this transcript)")
 
 def cmd_confusions(lines, args):
-    """Show only REASONING.md appends containing CONFUSION entries — the
+    """Show only reasoning-log appends containing CONFUSION entries — the
     places where the agent reported being confused or uncertain."""
     found = False
     for i, label, text in _reasoning_appends(lines):
@@ -325,6 +372,8 @@ def cmd_thinking_blocks(lines, args):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             if block.get('type') != 'thinking':
                 continue
             print(f"=== LINE {i} keys={sorted(block.keys())} ===")
@@ -340,6 +389,8 @@ def cmd_writes(lines, args):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             if block.get('type') == 'tool_use' and block.get('name') == 'Write':
                 fp = block.get('input', {}).get('file_path', '')
                 content = block['input'].get('content', '')
@@ -357,6 +408,8 @@ def cmd_edits(lines, args):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             if block.get('type') == 'tool_use' and block.get('name') == 'Edit':
                 fp = block.get('input', {}).get('file_path', '')
                 old = block['input'].get('old_string', '')
@@ -371,6 +424,8 @@ def cmd_test_runs(lines, args):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             if block.get('type') == 'tool_use' and block.get('name') == 'Bash':
                 cmd = block.get('input', {}).get('command', '')
                 if 'clojure -X:test' in cmd:
@@ -379,6 +434,8 @@ def cmd_test_runs(lines, args):
                     for j in range(i+1, min(i+5, len(lines))):
                         msg2 = lines[j].get('message', {})
                         for b2 in msg2.get('content', []):
+                            if not isinstance(b2, dict):
+                                continue
                             c = b2.get('content', '')
                             if isinstance(c, str) and ('assertions' in c or 'FAIL' in c or 'ERROR' in c or 'Syntax error' in c):
                                 result_lines = c.strip().split('\n')
@@ -391,6 +448,8 @@ def cmd_reads(lines, args):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             if block.get('type') == 'tool_use' and block.get('name') == 'Read':
                 fp = block.get('input', {}).get('file_path', '')
                 print(f"LINE {i}: {fp}")
@@ -399,6 +458,8 @@ def cmd_todos(lines, args):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             if block.get('type') == 'tool_use' and block.get('name') == 'TodoWrite':
                 todos = block.get('input', {}).get('todos', [])
                 print(f"=== LINE {i} ===")
@@ -412,6 +473,8 @@ def cmd_compaction(lines, args):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             if block.get('type') == 'text':
                 text = block.get('text', '')
                 if 'continued from a previous conversation' in text:
@@ -441,6 +504,8 @@ def _timeline_entry(i, line):
     msg = line.get('message', {})
     entries = []
     for block in msg.get('content', []):
+        if not isinstance(block, dict):
+            continue
         t = block.get('type', '')
         if t == 'text':
             text = block.get('text', '')
@@ -476,6 +541,8 @@ def cmd_tool_results(lines, args):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             if block.get('type') == 'tool_result':
                 c = block.get('content', '')
                 if isinstance(c, str) and re.search(query, c, re.IGNORECASE):
@@ -494,6 +561,8 @@ def cmd_search(lines, args):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             t = block.get('type', '')
             text = None
             label = None
@@ -524,6 +593,8 @@ def cmd_timeline(lines, args):
     for i, line in enumerate(lines):
         msg = line.get('message', {})
         for block in msg.get('content', []):
+            if not isinstance(block, dict):
+                continue
             t = block.get('type', '')
             if t == 'text':
                 text = block.get('text', '')
@@ -555,9 +626,40 @@ def cmd_timeline(lines, args):
                 text = block.get('thinking', '')
                 print(f"LINE {i} THINKING: ({len(text)} chars)")
 
+def _parse_ts(ts):
+    return datetime.fromisoformat(ts.replace('Z', '+00:00'))
+
+def _first_last_timestamps(path):
+    """Scan a transcript file for its first and last record timestamps."""
+    first = None
+    last = None
+    with open(path) as f:
+        for line in f:
+            try:
+                o = json.loads(line)
+            except Exception:
+                continue
+            ts = o.get('timestamp')
+            if ts:
+                if first is None:
+                    first = ts
+                last = ts
+    return first, last
+
+def _print_duration_footer(rows):
+    """rows: list of (first_ts, last_ts). Print the sum/wall/gap footer."""
+    total_dur = sum(int((_parse_ts(l) - _parse_ts(f)).total_seconds()) for f, l in rows)
+    run_start = _parse_ts(min(f for f, _ in rows))
+    run_end = _parse_ts(max(l for _, l in rows))
+    wall = int((run_end - run_start).total_seconds())
+    print()
+    print(f'sum of phase durations: {total_dur}s ({total_dur/60:.1f}m)')
+    print(f'wall clock first->last: {wall}s ({wall/60:.1f}m)')
+    print(f'gap total (non-phase):  {wall - total_dur}s ({(wall - total_dur)/60:.1f}m)')
+
 def cmd_run_overview(lines, args):
-    """Scan latest-transcripts/, print one row per file sorted by first timestamp."""
-    from datetime import datetime
+    """Legacy mode: scan latest-transcripts/, print one row per flat file
+    sorted by first timestamp."""
     if not os.path.isdir(LATEST_TRANSCRIPTS_DIR):
         sys.stderr.write(
             f"ERROR: {LATEST_TRANSCRIPTS_DIR}/ does not exist. "
@@ -569,19 +671,7 @@ def cmd_run_overview(lines, args):
         sys.exit(1)
     rows = []
     for path in files:
-        first = None
-        last = None
-        with open(path) as f:
-            for line in f:
-                try:
-                    o = json.loads(line)
-                except Exception:
-                    continue
-                ts = o.get('timestamp')
-                if ts:
-                    if first is None:
-                        first = ts
-                    last = ts
+        first, last = _first_last_timestamps(path)
         if first is None:
             continue
         name = os.path.basename(path)
@@ -589,25 +679,323 @@ def cmd_run_overview(lines, args):
         label = m.group(1) if m else name
         rows.append((first, last, label))
     rows.sort()
-    def parse(ts):
-        return datetime.fromisoformat(ts.replace('Z', '+00:00'))
-    run_start = parse(rows[0][0])
     print(f'{"phase":24s} {"start":>9s} {"end":>9s} {"dur":>7s} {"gap-before":>11s}')
     prev_end = None
-    total_dur = 0
     for first, last, label in rows:
-        t1 = parse(first)
-        t2 = parse(last)
+        t1 = _parse_ts(first)
+        t2 = _parse_ts(last)
         dur = int((t2 - t1).total_seconds())
-        gap = int((t1 - parse(prev_end)).total_seconds()) if prev_end else 0
+        gap = int((t1 - _parse_ts(prev_end)).total_seconds()) if prev_end else 0
         prev_end = last
-        total_dur += dur
         print(f'{label:24s} {first[11:19]} {last[11:19]} {dur:6d}s {gap:10d}s')
-    wall = int((parse(rows[-1][1]) - run_start).total_seconds())
-    print()
-    print(f'sum of phase durations: {total_dur}s ({total_dur/60:.1f}m)')
-    print(f'wall clock first->last: {wall}s ({wall/60:.1f}m)')
-    print(f'gap total (non-phase):  {wall - total_dur}s ({(wall - total_dur)/60:.1f}m)')
+    _print_duration_footer([(f, l) for f, l, _ in rows])
+
+
+# ---- Workflow mode (wf_* directory layout) ----
+#
+# A workflow run stores one transcript per phase agent:
+#   latest-transcripts/wf_<id>/agent-<id>.jsonl   per-phase transcript
+#   latest-transcripts/wf_<id>/journal.jsonl      started/result events
+# Retries of a phase produce multiple agents with the same phase number;
+# journal order determines attempt numbering.
+
+def detect_wf_dir():
+    """Return the newest wf_* dir under latest-transcripts/, or None if the
+    layout is legacy (no wf_* dir)."""
+    if not os.path.isdir(LATEST_TRANSCRIPTS_DIR):
+        return None
+    wf_dirs = [d for d in glob.glob(os.path.join(LATEST_TRANSCRIPTS_DIR, 'wf_*'))
+               if os.path.isdir(d)]
+    if not wf_dirs:
+        return None
+    def latest_mtime(d):
+        files = glob.glob(os.path.join(d, '*.jsonl'))
+        return max((os.path.getmtime(f) for f in files), default=0)
+    return max(wf_dirs, key=latest_mtime)
+
+def classify_agent(path):
+    """Read the first user message from an agent transcript and classify it.
+    Returns a dict with:
+      phase_num: int or None
+      phase_label: str  (e.g. "Phase 0: Implicit Spec")
+      role: 'work' | 'reviewer' | 'scribe'
+      lens: str or None  (reviewers in old workflow runs)"""
+    info = {'phase_num': None, 'phase_label': '?', 'role': 'work', 'lens': None}
+    try:
+        with open(path) as f:
+            for line in f:
+                try:
+                    rec = json.loads(line)
+                except Exception:
+                    continue
+                if rec.get('type') != 'user':
+                    continue
+                content = rec.get('message', {}).get('content', '')
+                if not isinstance(content, str):
+                    continue
+
+                # Scribe agents (old workflow runs)
+                if content.startswith('You are writing a single validation artifact'):
+                    info['role'] = 'scribe'
+                    for num, key, label in ((2, 'plan-validation', 'Plan Validation'),
+                                            (4, 'impl-validation', 'Impl Validation'),
+                                            (6, 'test-validation', 'Test Validation')):
+                        if key in content:
+                            info['phase_num'] = num
+                            info['phase_label'] = f'Phase {num}: {label} (scribe)'
+                            break
+                    return info
+
+                for l in content.split('\n'):
+                    if 'THIS PHASE:' in l:
+                        phase_text = l.strip().replace('THIS PHASE:', '').strip()
+                        info['phase_label'] = phase_text[:80]
+                        m = re.search(r'Phase\s+(\d+)', phase_text)
+                        if m:
+                            info['phase_num'] = int(m.group(1))
+                    if 'YOUR LENS:' in l:
+                        info['lens'] = l.strip().replace('YOUR LENS:', '').strip()[:60]
+                        info['role'] = 'reviewer'
+                return info
+    except Exception:
+        pass
+    return info
+
+def _journal_order(wf_dir):
+    """Read journal.jsonl and return agent IDs in started order."""
+    jpath = os.path.join(wf_dir, 'journal.jsonl')
+    if not os.path.exists(jpath):
+        return []
+    order = []
+    with open(jpath) as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+                if rec.get('type') == 'started':
+                    order.append(rec['agentId'])
+            except Exception:
+                continue
+    return order
+
+def _journal_results(wf_dir):
+    """Read journal.jsonl and return {agentId: result_text}."""
+    jpath = os.path.join(wf_dir, 'journal.jsonl')
+    if not os.path.exists(jpath):
+        return {}
+    results = {}
+    with open(jpath) as f:
+        for line in f:
+            try:
+                rec = json.loads(line)
+                if rec.get('type') == 'result':
+                    r = rec.get('result', '')
+                    if not isinstance(r, str):
+                        r = json.dumps(r)
+                    results[rec['agentId']] = r
+            except Exception:
+                continue
+    return results
+
+def build_agent_index(wf_dir):
+    """Ordered list of agent info dicts for the workflow run.
+    Each entry: {path, agent_id, phase_num, phase_label, role, lens, size,
+    mtime, attempt}. Ordered by journal started order (mtime fallback);
+    attempt numbers count retries of the same phase in that order."""
+    agents = []
+    for fname in sorted(os.listdir(wf_dir)):
+        if not fname.endswith('.jsonl') or fname == 'journal.jsonl':
+            continue
+        path = os.path.join(wf_dir, fname)
+        agent_id = fname.replace('agent-', '').replace('.jsonl', '')
+        info = classify_agent(path)
+        info['path'] = path
+        info['agent_id'] = agent_id
+        info['size'] = os.path.getsize(path)
+        info['mtime'] = os.path.getmtime(path)
+        agents.append(info)
+    journal_order = _journal_order(wf_dir)
+    if journal_order:
+        order_map = {aid: i for i, aid in enumerate(journal_order)}
+        agents.sort(key=lambda a: (order_map.get(a['agent_id'], len(order_map)), a['mtime']))
+    else:
+        agents.sort(key=lambda a: a['mtime'])
+    counts = {}
+    for a in agents:
+        key = (a['phase_num'], a['role'], a.get('lens'))
+        counts[key] = counts.get(key, 0) + 1
+        a['attempt'] = counts[key]
+    return agents
+
+def _match_phase(agents, phase_spec):
+    """All agents matching a --phase spec, in journal order.
+    Specs: "3" (phase number; primary), "4.dataflow" (reviewer lens, old
+    runs), "scribe-2" (scribe, old runs)."""
+    m = re.match(r'scribe[- ]?(\d+)$', phase_spec)
+    if m:
+        num = int(m.group(1))
+        return [a for a in agents if a['phase_num'] == num and a['role'] == 'scribe']
+    if '.' in phase_spec:
+        head, lens_q = phase_spec.split('.', 1)
+        try:
+            num = int(head)
+        except ValueError:
+            return []
+        lens_q = lens_q.lower()
+        return [a for a in agents
+                if a['phase_num'] == num
+                and a.get('lens') and lens_q in a['lens'].lower()]
+    try:
+        num = int(phase_spec)
+    except ValueError:
+        return []
+    matched = [a for a in agents if a['phase_num'] == num and a['role'] == 'work']
+    if not matched:
+        matched = [a for a in agents if a['phase_num'] == num]
+    return matched
+
+def select_agents(agents, phase_spec, attempt):
+    """Resolve --phase/--attempt to the agents a command operates on.
+    No --phase: all agents in journal order. With --phase: exactly one
+    agent — attempt K (1-based, journal order), default the LAST attempt."""
+    if phase_spec is None:
+        return agents
+    matched = _match_phase(agents, phase_spec)
+    if not matched:
+        sys.stderr.write(f"ERROR: no agent matching --phase {phase_spec} in workflow run.\n")
+        sys.exit(1)
+    if attempt is None:
+        return [matched[-1]]
+    if attempt < 1 or attempt > len(matched):
+        sys.stderr.write(
+            f"ERROR: --attempt {attempt} out of range for --phase {phase_spec} "
+            f"({len(matched)} attempt(s)).\n")
+        sys.exit(1)
+    return [matched[attempt - 1]]
+
+def load_agents(agents):
+    """Concatenate transcript lines from agents in journal order."""
+    all_lines = []
+    for a in agents:
+        all_lines.extend(load(a['path']))
+    return all_lines
+
+def _verdict_of(result_text):
+    """Best-effort verdict extraction from a journal result payload."""
+    if not result_text:
+        return ''
+    try:
+        r = json.loads(result_text)
+        if isinstance(r, dict) and 'verdict' in r:
+            return str(r['verdict'])
+    except (json.JSONDecodeError, TypeError):
+        pass
+    m = re.search(r'PHASE_VALIDATION:([\w-]+)', result_text)
+    if m:
+        return m.group(1)
+    if 'ARTIFACT:' in result_text:
+        return 'produced'
+    return ''
+
+def wf_summary(agents, wf_dir):
+    """Workflow-mode `summary` (no --phase): one line per agent in journal
+    order, then the final journal result."""
+    results = _journal_results(wf_dir)
+    print(f'{"#":>2s}  {"phase":42s} {"att":>3s} {"dur":>7s} {"size":>6s}  {"verdict"}')
+    print('-' * 100)
+    rows = []
+    for i, a in enumerate(agents):
+        first, last = _first_last_timestamps(a['path'])
+        if first and last:
+            dur = f"{int((_parse_ts(last) - _parse_ts(first)).total_seconds())}s"
+        else:
+            dur = 'n/a'
+        lens_suffix = f' [{a["lens"][:20]}]' if a.get('lens') else ''
+        phase_col = f'{a["phase_label"]}{lens_suffix}'[:42]
+        size_kb = f'{a["size"] / 1024:.0f}k'
+        verdict = _verdict_of(results.get(a['agent_id'], ''))
+        print(f'{i:2d}  {phase_col:42s} {a["attempt"]:3d} {dur:>7s} {size_kb:>6s}  {verdict}')
+    ordered_results = [results[a['agent_id']] for a in agents if a['agent_id'] in results]
+    if ordered_results:
+        head = ordered_results[-1].strip().split('\n')[0]
+        print()
+        print(f'final result: {head[:300]}')
+
+def wf_agent_summary(agent, wf_dir):
+    """Workflow-mode `summary --phase P`: per-agent details from its own
+    transcript lines. Per-agent transcripts may lack a `result` record with
+    usage — cost/stop print as n/a in that case."""
+    lines = load(agent['path'])
+    print(f"Phase: {agent['phase_label']} (attempt {agent['attempt']})")
+    print(f"Agent: {agent['agent_id']}")
+    first, last = _first_last_timestamps(agent['path'])
+    if first and last:
+        dur = (_parse_ts(last) - _parse_ts(first)).total_seconds()
+        print(f"Duration: {dur:.0f}s ({dur/60:.1f}m)")
+    else:
+        print("Duration: n/a")
+    result_rec = next((l for l in lines if l.get('type') == 'result'), None)
+    if result_rec is not None:
+        cost = result_rec.get('total_cost_usd')
+        print(f"Cost: ${cost:.2f}" if cost is not None else "Cost: n/a")
+        print(f"Turns: {result_rec.get('num_turns')}")
+        print(f"Stop: {result_rec.get('stop_reason')}")
+        print(f"Result: {str(result_rec.get('result', ''))[:300]}")
+    else:
+        turns = sum(1 for l in lines if l.get('type') == 'assistant')
+        print("Cost: n/a")
+        print(f"Turns: {turns} (assistant messages)")
+        print("Stop: n/a")
+        result_text = _journal_results(wf_dir).get(agent['agent_id'], '')
+        if result_text:
+            print(f"Result: {result_text[:300]}")
+        else:
+            print("Result: (no journal result for this agent)")
+
+def wf_run_overview(agents, wf_dir):
+    """Workflow-mode `run-overview`: one row per phase agent in journal order
+    with start/end/duration and gap-before, plus the duration-sum footer."""
+    rows = []
+    print(f'{"#":>2s}  {"phase":42s} {"att":>3s} {"start":>9s} {"end":>9s} {"dur":>7s} {"gap-before":>11s}')
+    prev_end = None
+    for i, a in enumerate(agents):
+        first, last = _first_last_timestamps(a['path'])
+        lens_suffix = f' [{a["lens"][:20]}]' if a.get('lens') else ''
+        phase_col = f'{a["phase_label"]}{lens_suffix}'[:42]
+        if first is None:
+            print(f'{i:2d}  {phase_col:42s} {a["attempt"]:3d} {"(no timestamps)":>9s}')
+            continue
+        t1 = _parse_ts(first)
+        t2 = _parse_ts(last)
+        dur = int((t2 - t1).total_seconds())
+        gap = int((t1 - _parse_ts(prev_end)).total_seconds()) if prev_end else 0
+        prev_end = last
+        rows.append((first, last))
+        print(f'{i:2d}  {phase_col:42s} {a["attempt"]:3d} {first[11:19]} {last[11:19]} {dur:6d}s {gap:10d}s')
+    if not rows:
+        sys.stderr.write(f"ERROR: no agent transcripts with timestamps in {wf_dir}.\n")
+        sys.exit(1)
+    _print_duration_footer(rows)
+
+def run_workflow_mode(wf_dir, cmd_name, cmd_args, phase_spec, attempt):
+    agents = build_agent_index(wf_dir)
+    if not agents:
+        sys.stderr.write(f"ERROR: no agent-*.jsonl transcripts in {wf_dir}.\n")
+        sys.exit(1)
+    if cmd_name == 'run-overview':
+        wf_run_overview(agents, wf_dir)
+        return
+    selected = select_agents(agents, phase_spec, attempt)
+    if cmd_name == 'summary':
+        if phase_spec is None:
+            wf_summary(agents, wf_dir)
+        else:
+            wf_agent_summary(selected[0], wf_dir)
+        return
+    # All other commands run on transcript lines: one agent's lines with
+    # --phase, or every agent concatenated in journal order without it (so
+    # module/final-write replay Write + Edits across all phases).
+    COMMANDS[cmd_name](load_agents(selected), cmd_args)
+
 
 COMMANDS = {
     'summary': cmd_summary,
@@ -635,8 +1023,8 @@ COMMANDS = {
     'run-overview': cmd_run_overview,
 }
 
-# Commands that scan latest-transcripts/ themselves and do not need a single
-# transcript loaded up front.
+# Legacy-mode commands that scan latest-transcripts/ themselves and do not
+# need a single transcript loaded up front.
 MULTI_TRANSCRIPT_COMMANDS = {'run-overview'}
 
 if __name__ == '__main__':
@@ -668,7 +1056,11 @@ if __name__ == '__main__':
     if not args or args[0] not in COMMANDS:
         print(__doc__)
         sys.exit(1)
-    if args[0] in MULTI_TRANSCRIPT_COMMANDS:
+
+    wf_dir = detect_wf_dir()
+    if wf_dir is not None:
+        run_workflow_mode(wf_dir, args[0], args[1:], phase, attempt)
+    elif args[0] in MULTI_TRANSCRIPT_COMMANDS:
         COMMANDS[args[0]](None, args[1:])
     else:
         transcript_path = resolve_transcript_path(phase, attempt)

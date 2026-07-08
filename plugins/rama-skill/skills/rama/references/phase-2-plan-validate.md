@@ -47,8 +47,8 @@ When unsure between minor and major, choose **major-fail**.
 This is a three-way verdict phase. The orchestrator uses the verdict to decide what happens next:
 
 - **pass** → proceed to Phase 3 (implement).
-- **minor-fail** → the validator fixes `PLAN.md` directly and proceeds to Phase 3. No return to Phase 1, no re-validation.
-- **major-fail** → return to Phase 1 (plan) for revision. The plan author reads `PLAN_VALIDATION.md` and addresses every FAIL item. Up to 3 retry iterations; if the cap is hit, the orchestrator proceeds to Phase 3 with the best plan so far.
+- **minor-fail** → the validator has already fixed `PLAN.md` directly; the build proceeds to Phase 3 (implement) without re-planning. No return to Phase 1, no re-validation.
+- **major-fail** → return to Phase 1 (plan) for revision. The plan author reads `PLAN_VALIDATION.md` and addresses every FAIL item. Up to 3 retries; if the cap is exceeded, the run fails.
 
 ## Do NOT
 

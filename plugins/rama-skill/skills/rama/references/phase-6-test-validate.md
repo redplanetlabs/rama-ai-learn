@@ -46,7 +46,7 @@ This is a three-way verdict phase. The orchestrator uses the verdict to decide w
 - **minor-fail** → proceed directly to Phase 7 (finish). Phase 7 absorbs the test fix during its iterate loop — no fresh re-invocation of Phase 5, and no re-run of Phase 6. This avoids paying for a full context switch when only localized line edits are needed.
 - **major-fail** → return to Phase 5 (tests) for restructuring. After the fix, Phase 6 re-runs to validate the new test suite.
 
-Up to 3 retry iterations per gate; if the cap is hit, the orchestrator proceeds to Phase 7.
+Up to 3 retries per gate; if the cap is exceeded, the run fails.
 
 ## Do NOT
 

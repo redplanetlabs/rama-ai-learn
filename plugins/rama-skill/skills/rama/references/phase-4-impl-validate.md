@@ -45,7 +45,7 @@ This is a three-way verdict phase. The orchestrator uses the verdict to decide w
 - **minor-fail** → return to Phase 3 (implement) for a localized fix. After the fix, the orchestrator skips re-running Phase 4 on the next pass (the fix is too small to warrant re-validation) and proceeds directly to Phase 5. A misclassified minor-fail (should have been major) lets an architectural problem through without re-validation.
 - **major-fail** → return to Phase 3 (implement) for restructuring. After the fix, Phase 4 re-runs to validate the new architecture. A misclassified major-fail (should have been minor) wastes a full validation cycle on a one-line change.
 
-Up to 3 retry iterations per gate; if the cap is hit, the orchestrator proceeds to Phase 5.
+Up to 3 retries per gate; if the cap is exceeded, the run fails.
 
 ## Do NOT
 

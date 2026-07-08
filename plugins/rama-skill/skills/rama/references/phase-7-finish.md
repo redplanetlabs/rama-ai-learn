@@ -42,10 +42,10 @@ Emit one of these as the LAST non-empty line of your output:
 
 ## Orchestration routing
 
-This is a binary verdict phase. The orchestrator uses the verdict to decide what happens next:
+This is a binary verdict phase and the final phase. The orchestrator runs it as a single session — there is no retry:
 
 - **pass** → done. Overall result: PASS.
-- **fail** → retry with a fresh session (up to 2 sessions total). If both fail, overall result: FAIL.
+- **fail** → done. Overall result: FAIL.
 
 ## Do NOT
 
