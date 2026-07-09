@@ -215,7 +215,7 @@ materialize     = '(materialize>' { var } ':>' pstate-var ')' ;
 ## Constraints
 
 - Variable shadowing prohibited in pre-agg
-- Final pre-agg partitioner required when aggregators are present
+- Final pre-agg partitioner required when aggregators are present — except with `+group-by`, which needs no explicit partitioner: it auto hash-partitions by the grouping expression
 - No partitioners in post-agg
 - Post-agg scope: only group-by keys + aggregator outputs
 - Stream topologies cannot use `<<batch`
