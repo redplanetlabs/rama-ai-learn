@@ -11,6 +11,8 @@ A query topology is a batch block that:
 
 The final pre-agg partitioner must be `|origin`, which routes computation back to the calling task. The output variable must be emitted exactly once. No partitioners can be used in the post-agg phase.
 
+When every aggregator is a combiner, two-phase aggregation applies (see `aggregators.md`): each task partially aggregates its rows locally and ships ONE partial across `|origin`, not the rows themselves. Cost the fan-in as one transfer per contributing task. Aggregators that are not combiners ship every row.
+
 ## Choosing pre-agg only vs. aggregation
 
 A query topology always produces one result. The question is how that result is computed.

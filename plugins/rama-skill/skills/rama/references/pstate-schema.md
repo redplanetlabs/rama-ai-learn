@@ -35,6 +35,8 @@ Vectors and sets cannot be top-level. Use `java.util.ArrayList` or
 
 **First-class schemas** (top-level map and fixed-keys-schema) are backed by RocksDB — each key/field is individually addressable on disk. Reads and writes to individual keys are efficient O(1) operations without loading the entire structure.
 
+The root of a first-class schema is NOT a writable location: a root-level `(termval ...)` over a top-level map or fixed-keys-schema fails at runtime (it would replace a RocksDB-backed structure with a plain value). Write individual keys/fields instead — use multi-path for several fields at once. Root-level `termval` is valid only when the top-level schema is a Class reference.
+
 **Class-reference schemas** (top-level `Long`, `String`, `Object`, etc.) are backed by a single value on disk. The entire value is read/written as one unit. These do not support subindexing.
 
 **Writes are batched to disk** according to topology type: microbatch flushes at the end of each microbatch attempt, stream flushes at the end of each batch of streaming events executed together on a task. Individual `local-transform>` calls within a batch update an in-memory buffer; the disk write happens once at batch boundary.
@@ -300,15 +302,13 @@ Schema type rules:
 
 ## `:initial-value` Rules
 
-```text
-:initial-value availability by schema type:
+`:initial-value` is ONLY valid for a top-level class schema (e.g. `Long`, `String`) — the single-value-per-partition case:
 
-value-schema       ✗  (no options map accepted; Syntax error macroexpanding)
-{K V}  (map)       ✗  (Top-level maps cannot have an init value)
-vector-schema      ✓
-set-schema         ✓
-fixed-keys-schema  ✓  (per-key defaults via schema)
+```clojure
+(declare-pstate s $$p Long {:initial-value 0})
 ```
+
+Every other top-level schema rejects it: top-level maps and fixed-keys-schema cannot have an init value (keys/fields simply start absent), and vectors/sets cannot be top-level at all. For "start at zero" semantics inside a map, use a write-time default in the transform path — e.g. `[(keypath *k) (nil->val 0) (term inc)]` — or use the `+compound` aggregator form, which initializes non-existent locations it encounters (see `aggregators.md`).
 
 ## PState Nil Semantics
 

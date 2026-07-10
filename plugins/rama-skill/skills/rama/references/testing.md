@@ -326,7 +326,7 @@ Modules that check the current time should use `TopologyUtils/currentTimeMillis`
 
 ## Testing Tick Depots
 
-Tick depots fire automatically on a timer, which makes testing non-deterministic. To control when ticks fire in tests, replace the tick depot with a regular global depot that tests can append to manually.
+Tick depots fire automatically on a timer, which makes testing non-deterministic. Tick emissions also count toward `wait-for-microbatch-processed-count`'s processed count, so a live tick depot makes cumulative-count synchronization unreliable — the count advances on its own. For both reasons, replace the tick depot in tests with a regular global depot that tests append to manually, making every processed record test-controlled.
 
 Define a global var somewhere in the project that tests can redef:
 
