@@ -49,6 +49,10 @@ Do NOT commit to the first PState design that comes to mind — PState schema is
 
 Do NOT cost contiguous keys in a subindexed sorted structure as N point seeks — they're a range scan (1 seek + N iter-reads × 5µs), ~100× cheaper than N × 0.5ms. Think through whether a query can be satisifed completely or partially with range scans.
 
+Justify design decisions only by requirements stated in the spec. Do NOT justify a decision by the anticipated implementation of anything outside the spec — a consumer, a later subsystem, future work. If their needs bind, they are stated as requirements; if not stated, they do not bind. When the spec bounds a metric, meet the bound on that metric — improving a metric the spec does not state never justifies missing one it does.
+
+When building one subsystem of a decomposed module, do NOT anticipate or design around later subsystems' implementations — design as if later subsystems do not exist beyond the requirements your spec states.
+
 **Choose a partitioning scheme for every write and justify it for both latency and throughput** (see `references/pstate-schema.md` "Partitioning control"). Common cases:
 - **`|hash`** when the keyspace is large (many keys per task, so hash variance is negligible) and no single key takes a disproportionate share of events or storage.
 - **`|all`** when the data is small to hold on every task and written rarely — every task pays every write.
