@@ -59,9 +59,10 @@ LATEST_BASENAME=$(basename "$LATEST")
 
 # Run prefix = filename up to and including the challenge name, before the
 # `-phase{N}` suffix. Strip `-phaseN` and `-phaseN-attemptK` suffixes from the
-# matched basename, leaving the shared run-start-time + agent + challenge
-# prefix that all phases of the same run share.
-RUN_PREFIX=$(echo "$LATEST_BASENAME" | sed -E 's/-phase[0-9]+(-attempt[0-9]+)?\.jsonl$//; s/\.jsonl$//')
+# All transcripts of one run share the same {date}-{time} prefix (the
+# run-start-time), regardless of phase id shape (numeric, keyword stages
+# like phasedecompose/phasefull-spec-review, or subsystem-tagged names).
+RUN_PREFIX=$(echo "$LATEST_BASENAME" | grep -oE '^[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}')
 
 case "$mode" in
   all)
@@ -78,7 +79,7 @@ case "$mode" in
     DEST="$REPO_ROOT/latest-transcripts"
     rm -rf "$DEST"
     mkdir -p "$DEST"
-    docker exec "$CONTAINER" bash -c "ls /transcripts/${RUN_PREFIX}-phase*.jsonl 2>/dev/null" \
+    docker exec "$CONTAINER" bash -c "ls /transcripts/${RUN_PREFIX}-*.jsonl 2>/dev/null" \
       | while read -r src; do
           docker cp "$CONTAINER:$src" "$DEST/$(basename "$src")"
         done
@@ -88,7 +89,7 @@ case "$mode" in
 
   phase)
     # Find the latest attempt of the requested phase within the most recent run.
-    PHASE_PATTERN="/transcripts/${RUN_PREFIX}-phase${phase}*.jsonl"
+    PHASE_PATTERN="/transcripts/${RUN_PREFIX}-*phase${phase}*.jsonl"
     LATEST_PHASE=$(docker exec "$CONTAINER" bash -c "ls -t ${PHASE_PATTERN} 2>/dev/null | head -1")
     if [[ -z "$LATEST_PHASE" ]]; then
       echo "ERROR: No transcript for phase $phase of run ${RUN_PREFIX}." >&2
