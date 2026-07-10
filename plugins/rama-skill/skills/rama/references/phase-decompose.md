@@ -16,7 +16,7 @@ Partition the module into subsystems, each of which will get its own full plan�
 Split ONLY when EVERY one of these holds for the proposed boundary:
 
 - **(a) One-directional consumption.** Later subsystems read/extend what earlier ones materialize, never the reverse. The subsystems must form a dependency order.
-- **(b) Property-shaped induced requirements.** Each later subsystem's needs on an earlier one are expressible as short, property-shaped requirements on the earlier subsystem. **A requirement states what and how well — never how.** It must be phrased as properties observable at the subsystem boundary — cost bounds (seeks, iterations, latency), balance bounds, consistency/visibility — and must NOT name a partitioning, placement, task, PState/depot shape, data structure, or algorithm, of EITHER subsystem. Litmus test: if only one design could satisfy the requirement as written, it is a design in disguise — rewrite it as the cost/balance property that design was meant to achieve. And **if stating what B needs from A requires designing B, do not split them.**
+- **(b) Needs expressible as requirements.** Write what a later subsystem needs from an earlier one as requirements: what data must be provided, and how well accessing it must perform given the later subsystem's workload. This never requires knowing how the later subsystem will be implemented — do not assume it, and do not design it.
 - **(c) Independently buildable.** Each subsystem is fully buildable and testable given only the subsystems before it.
 
 There is NO cap on subsystem count, but every boundary must pass (a)–(c).
