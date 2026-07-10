@@ -2,14 +2,23 @@
 """Analyze a challenge transcript for common patterns.
 
 Usage:
-  python3 scripts/analyze-latest-transcript.py [--phase N [--attempt K]] [command] [args...]
+  python3 scripts/analyze-latest-transcript.py [--phase N [--attempt K] [--subsystem S]] [command] [args...]
 
 Transcript selection:
   Default:                       reads latest-transcript.jsonl in the repo root.
   --phase N:                     reads the latest attempt of phase N from
                                  latest-transcripts/ (highest-numbered attempt).
+                                 N is a phase number (0..7) or a stage name
+                                 (decompose, full-spec-review, full-spec-fix).
   --phase N --attempt K:         reads exactly attempt K of phase N. attempt 1 is
                                  the file without `-attempt` in the name.
+  --subsystem S:                 on multi-subsystem runs, restrict --phase
+                                 selection to transcripts tagged with subsystem
+                                 slug S (filenames look like
+                                 ...-<challenge>-<S>-phase3.jsonl). Without it,
+                                 when several subsystems match a phase, the
+                                 latest file by mtime is picked and the choice
+                                 is printed to stderr.
 
   Populate `latest-transcripts/` with `bash scripts/docker-copy-transcript.sh`
   (default mode copies all transcripts of the most recent run).
@@ -52,14 +61,40 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_TRANSCRIPT = os.path.join(REPO_ROOT, 'latest-transcript.jsonl')
 LATEST_TRANSCRIPTS_DIR = os.path.join(REPO_ROOT, 'latest-transcripts')
 
-def resolve_transcript_path(phase=None, attempt=None):
+def _phase_stem(path, phase):
+    """The filename prefix before `-phase{phase}` (drops any -attempt suffix).
+
+    Two files with different stems for the same phase belong to different
+    subsystems (multi-subsystem runs tag filenames as
+    ...-<challenge>-<subsystem>-phase3.jsonl). Returns None when the name
+    doesn't match the expected shape."""
+    name = os.path.basename(path)
+    m = re.match(rf'(.*)-phase{re.escape(str(phase))}(?:-attempt\d+)?\.jsonl$', name)
+    return m.group(1) if m else None
+
+def _pick_latest_by_mtime(candidates, phase):
+    """Disambiguate multiple subsystem-tagged matches: latest mtime wins.
+    Prints which file was chosen (stderr, so stdout stays clean)."""
+    candidates = sorted(candidates, key=os.path.getmtime, reverse=True)
+    chosen = candidates[0]
+    sys.stderr.write(
+        f"NOTE: {len(candidates)} transcripts match --phase {phase} "
+        f"(multiple subsystems); picked latest by mtime: "
+        f"{os.path.basename(chosen)}. Use --subsystem <slug> to select "
+        f"explicitly.\n")
+    return chosen
+
+def resolve_transcript_path(phase=None, attempt=None, subsystem=None):
     """Resolve which transcript file to read.
 
     - phase=None: returns latest-transcript.jsonl in the repo root.
     - phase=N: finds *-phase{N}*.jsonl in latest-transcripts/.
       With attempt=None, picks the highest-numbered attempt.
       With attempt=K, picks exactly that attempt (attempt 1 is the file
-      without `-attempt` in the name)."""
+      without `-attempt` in the name).
+      With subsystem=S, only files tagged `-{S}-phase{N}` are considered.
+      Without subsystem, if matches span multiple subsystems, the latest
+      file by mtime is picked and the choice is printed to stderr."""
     if phase is None:
         return DEFAULT_TRANSCRIPT
 
@@ -73,14 +108,25 @@ def resolve_transcript_path(phase=None, attempt=None):
         sys.stderr.write(f"ERROR: --attempt must be >= 1 (got {attempt}).\n")
         sys.exit(2)
 
+    def filter_subsystem(candidates):
+        if subsystem is None:
+            return candidates
+        return [c for c in candidates
+                if f'-{subsystem}-phase{phase}' in os.path.basename(c)]
+
     if attempt is None:
         # Pick highest-numbered attempt.
         pattern = os.path.join(LATEST_TRANSCRIPTS_DIR, f'*-phase{phase}*.jsonl')
-        candidates = glob.glob(pattern)
+        candidates = filter_subsystem(glob.glob(pattern))
         if not candidates:
+            sub = f" --subsystem {subsystem}" if subsystem else ""
             sys.stderr.write(
-                f"ERROR: no transcript matching --phase {phase} in {LATEST_TRANSCRIPTS_DIR}/.\n")
+                f"ERROR: no transcript matching --phase {phase}{sub} in {LATEST_TRANSCRIPTS_DIR}/.\n")
             sys.exit(1)
+        stems = {_phase_stem(c, phase) for c in candidates}
+        if len(stems) > 1:
+            # Multiple subsystems match this phase and no --subsystem given.
+            return _pick_latest_by_mtime(candidates, phase)
         def attempt_of(path):
             m = re.search(r'-attempt(\d+)\.jsonl$', path)
             return int(m.group(1)) if m else 1
@@ -94,12 +140,15 @@ def resolve_transcript_path(phase=None, attempt=None):
         pattern = os.path.join(LATEST_TRANSCRIPTS_DIR, f'*-phase{phase}.jsonl')
     else:
         pattern = os.path.join(LATEST_TRANSCRIPTS_DIR, f'*-phase{phase}-attempt{attempt}.jsonl')
-    candidates = glob.glob(pattern)
+    candidates = filter_subsystem(glob.glob(pattern))
     if not candidates:
+        sub = f" --subsystem {subsystem}" if subsystem else ""
         sys.stderr.write(
-            f"ERROR: no transcript matching --phase {phase} --attempt {attempt} "
+            f"ERROR: no transcript matching --phase {phase} --attempt {attempt}{sub} "
             f"in {LATEST_TRANSCRIPTS_DIR}/.\n")
         sys.exit(1)
+    if len(candidates) > 1:
+        return _pick_latest_by_mtime(candidates, phase)
     return candidates[0]
 
 def load(path=None):
@@ -568,6 +617,7 @@ def cmd_run_overview(lines, args):
         sys.stderr.write(f"ERROR: no transcripts in {LATEST_TRANSCRIPTS_DIR}/.\n")
         sys.exit(1)
     rows = []
+    stems = []
     for path in files:
         first = None
         last = None
@@ -585,9 +635,32 @@ def cmd_run_overview(lines, args):
         if first is None:
             continue
         name = os.path.basename(path)
-        m = re.search(r'-(phase\d+(?:-attempt\d+)?)\.jsonl$', name)
-        label = m.group(1) if m else name
-        rows.append((first, last, label))
+        m = re.search(r'-(phase(?:\d+|decompose|full-spec-review|full-spec-fix)(?:-attempt\d+)?)\.jsonl$', name)
+        if m:
+            label = m.group(1)
+            # Keyword stages read better without the `phase` prefix
+            # (decompose, full-spec-review); numbered phases keep it.
+            if not re.match(r'phase\d', label):
+                label = label[len('phase'):]
+            stem = name[:m.start()]
+        else:
+            label = name
+            stem = None
+        rows.append((first, last, label, stem))
+        if stem is not None:
+            stems.append(stem)
+    # Multi-subsystem runs tag filenames between the challenge name and the
+    # phase suffix (...-<challenge>-<subsystem>-phase3.jsonl). The shortest
+    # stem is the untagged run prefix (phase 0/decompose/full-spec-review are
+    # never tagged); anything longer carries a subsystem tag — show it.
+    base = min(stems, key=len) if stems else None
+    labeled = []
+    for first, last, label, stem in rows:
+        if (base is not None and stem is not None and stem != base
+                and stem.startswith(base + '-')):
+            label = f'{label} [{stem[len(base) + 1:]}]'
+        labeled.append((first, last, label))
+    rows = labeled
     rows.sort()
     def parse(ts):
         return datetime.fromisoformat(ts.replace('Z', '+00:00'))
@@ -643,6 +716,7 @@ if __name__ == '__main__':
     args = sys.argv[1:]
     phase = None
     attempt = None
+    subsystem = None
     while args and args[0].startswith('--'):
         if args[0] == '--phase':
             if len(args) < 2:
@@ -660,10 +734,19 @@ if __name__ == '__main__':
                 sys.stderr.write(f"ERROR: --attempt must be an integer (got {args[1]!r})\n")
                 sys.exit(2)
             args = args[2:]
+        elif args[0] == '--subsystem':
+            if len(args) < 2:
+                sys.stderr.write("ERROR: --subsystem requires an argument\n")
+                sys.exit(2)
+            subsystem = args[1]
+            args = args[2:]
         else:
             break
     if attempt is not None and phase is None:
         sys.stderr.write("ERROR: --attempt requires --phase\n")
+        sys.exit(2)
+    if subsystem is not None and phase is None:
+        sys.stderr.write("ERROR: --subsystem requires --phase\n")
         sys.exit(2)
     if not args or args[0] not in COMMANDS:
         print(__doc__)
@@ -671,6 +754,6 @@ if __name__ == '__main__':
     if args[0] in MULTI_TRANSCRIPT_COMMANDS:
         COMMANDS[args[0]](None, args[1:])
     else:
-        transcript_path = resolve_transcript_path(phase, attempt)
+        transcript_path = resolve_transcript_path(phase, attempt, subsystem)
         lines = load(transcript_path)
         COMMANDS[args[0]](lines, args[1:])

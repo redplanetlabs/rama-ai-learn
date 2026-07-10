@@ -453,7 +453,7 @@
         get-utl       (foreign-query ipc m "get-user-timeline")
         mb-cnt        (atom 0)]
     (reify
-      p/SocialGraph
+      p/SocialApp
       (follow! [_ account-id target-id]
         (foreign-append! follow-depot (->FollowAccount account-id target-id) :ack))
       (unfollow! [_ account-id target-id]
@@ -462,8 +462,6 @@
         (or (foreign-invoke-query followers-q target-id) #{}))
       (get-followees [_ account-id]
         (set (foreign-select [(keypath account-id) ALL] followees {:pkey account-id})))
-
-      p/Fanout
       (set-profile! [_ account-id name location]
         (foreign-append! profile-depot
                          (->ProfileEvent account-id name location)))

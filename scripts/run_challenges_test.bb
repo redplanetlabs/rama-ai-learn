@@ -567,5 +567,363 @@
     (is (= :minor-fail (parse-phase-verdict "PHASE_VALIDATION:minor-fail")))
     (is (= :major-fail (parse-phase-verdict "PHASE_VALIDATION:major-fail")))))
 
+(deftest phase-cmd-subsystem-test
+  ;; Tests the subsystem-aware arity of the phase command builders and the
+  ;; rendering of keyword stage ids (decompose, full-spec-review, full-spec-fix).
+  (testing "claude-phase-cmd"
+    (testing "appends the subsystem slug as a third argument"
+      (let [cmd (claude-phase-cmd "test-ch" 3 "/root" nil nil "alpha")]
+        (is (some #{"/challenge-phase test-ch 3 alpha"} cmd))))
+    (testing "renders keyword stage ids as their names"
+      (let [cmd (claude-phase-cmd "test-ch" :full-spec-review "/root" nil nil nil)]
+        (is (some #{"/challenge-phase test-ch full-spec-review"} cmd)))
+      (let [cmd (claude-phase-cmd "test-ch" :decompose "/root" nil nil nil)]
+        (is (some #{"/challenge-phase test-ch decompose"} cmd)))))
+  (testing "codex-phase-cmd"
+    (testing "appends the subsystem slug as a third argument"
+      (let [cmd (codex-phase-cmd "test-ch" 3 "/root" nil nil "alpha")]
+        (is (some #{"$challenge-phase test-ch 3 alpha"} cmd))))
+    (testing "renders keyword stage ids as their names"
+      (let [cmd (codex-phase-cmd "test-ch" :decompose "/root" nil nil nil)]
+        (is (some #{"$challenge-phase test-ch decompose"} cmd))))))
+
+(deftest save-transcript-subsystem-test
+  ;; Tests subsystem and keyword-stage encoding in transcript filenames.
+  ;; Contract: subsystem slug appears between challenge name and phase suffix;
+  ;; keyword stage ids render as their names; no subsystem → unchanged names.
+  (testing "save-transcript! with subsystem/stage ids"
+    (let [tmp-root (str (babashka.fs/create-temp-dir))
+          project-dir (str (babashka.fs/path tmp-root "project"))
+          run-start (java.time.LocalDateTime/now)]
+      (babashka.fs/create-dirs project-dir)
+      (try
+        (testing "includes subsystem slug before the phase suffix"
+          (let [path (save-transcript! project-dir "claude" nil nil "ch" "x" 3 2 run-start "alpha")]
+            (is (re-find #"-ch-alpha-phase3-attempt2\.jsonl$" path))))
+        (testing "renders keyword stage ids in the filename"
+          (let [path (save-transcript! project-dir "claude" nil nil "ch" "x" :full-spec-review 1 run-start nil)]
+            (is (re-find #"-ch-phasefull-spec-review\.jsonl$" path))))
+        (testing "nil subsystem keeps the historical filename shape"
+          (let [path (save-transcript! project-dir "claude" nil nil "ch" "x" 3 1 run-start nil)]
+            (is (re-find #"-ch-phase3\.jsonl$" path))))
+        (finally
+          (babashka.fs/delete-tree tmp-root))))))
+
+;;; Phase-loop routing simulation
+;;;
+;;; Drives phase-loop! end-to-end through a STUBBED agent-fns :phase-cmd — no
+;;; real agent runs, but the real run-phase! path (reasoning sentinel append,
+;;; subprocess invocation, verdict parsing, transcript saving) is exercised.
+;;; The stub returns a bash command that echoes the scripted PHASE_VALIDATION
+;;; verdict; the decompose stage's command also writes the DECOMPOSITION.json
+;;; fixture, exactly as a real agent would. Every invocation is recorded as
+;;; [phase-id subsystem attempt], letting the tests assert the full routing:
+;;; phase 0 → decompose → per-subsystem 1..7 cycles → full-spec review.
+
+(defn- passing-verdicts
+  "Default verdict script: every gate passes; non-verdict phases emit none."
+  [phase-id _subsystem _attempt]
+  (cond
+    (contains? #{2 4 6 7} phase-id) :pass
+    (contains? #{:full-spec-review :full-spec-fix} phase-id) :pass
+    :else nil))
+
+(defn- decompose-fixture-script
+  "Shell script for the decompose stage: writes the DECOMPOSITION.json fixture
+  (relative to project-root, where invoke-command! runs) like a real agent
+  would, or does nothing when the scenario omits the file."
+  [challenge decomposition]
+  (if decomposition
+    (str "mkdir -p implementations/" challenge
+         " && cat > implementations/" challenge "/DECOMPOSITION.json <<'EOF'\n"
+         (json/generate-string decomposition)
+         "\nEOF")
+    "true"))
+
+(defn- scripted-phase-cmd
+  "Build an agent-fns :phase-cmd stub. Records [phase-id subsystem attempt]
+  into `invocations` (attempt = how many times this [phase-id subsystem] pair
+  has been invoked so far) and returns a bash command whose stdout carries the
+  scripted PHASE_VALIDATION verdict, if any."
+  [invocations verdict-fn challenge decomposition]
+  (fn [_challenge-name phase-id _project-root _model _reasoning subsystem]
+    (let [attempt (inc (count (filter (fn [[p s _]] (and (= p phase-id) (= s subsystem)))
+                                      @invocations)))]
+      (swap! invocations conj [phase-id subsystem attempt])
+      (let [verdict (verdict-fn phase-id subsystem attempt)
+            base    (if (= :decompose phase-id)
+                      (decompose-fixture-script challenge decomposition)
+                      "true")
+            script  (if verdict
+                      (str base " && echo PHASE_VALIDATION:" (name verdict))
+                      base)]
+        ["bash" "-c" script]))))
+
+(defn- simulate-phase-loop
+  "Run phase-loop! against a stubbed agent-fns :phase-cmd. Options:
+    :verdict-fn     (fn [phase-id subsystem attempt] verdict-or-nil) — defaults
+                    to passing-verdicts
+    :decomposition  EDN vector the stubbed decompose stage writes to
+                    DECOMPOSITION.json, or nil to leave the file missing
+  Returns {:result      <phase-loop! result>
+           :invocations [[phase-id subsystem attempt] ...]
+           :transcripts [transcript file names written by save-transcript!]
+           :reasoning   REASONING.md content (runner-written sentinels)}."
+  [{:keys [verdict-fn decomposition]}]
+  (let [verdict-fn (or verdict-fn passing-verdicts)
+        tmp-root (str (babashka.fs/create-temp-dir))
+        project-dir (str (babashka.fs/path tmp-root "project"))
+        challenge "sim-ch"
+        impl-dir (babashka.fs/path project-dir "implementations" challenge)
+        invocations (atom [])
+        agent-fns {:phase-cmd (scripted-phase-cmd invocations verdict-fn
+                                                  challenge decomposition)}]
+    (babashka.fs/create-dirs impl-dir)
+    (try
+      (with-redefs [save-attempt! (fn [_project-root _challenge-name]
+                                    {:exit 0 :out "" :err "" :duration-s 0})]
+        (let [result (binding [*err* (java.io.StringWriter.)] ; silence decomposition warnings
+                       (phase-loop! agent-fns challenge project-dir
+                                    "claude" nil nil
+                                    (java.time.LocalDateTime/now)
+                                    (System/currentTimeMillis)))
+              reasoning-path (babashka.fs/path impl-dir "REASONING.md")]
+          {:result result
+           :invocations @invocations
+           :transcripts (->> (babashka.fs/glob (babashka.fs/path tmp-root "transcripts") "*.jsonl")
+                             (mapv #(str (babashka.fs/file-name %)))
+                             sort
+                             vec)
+           :reasoning (if (babashka.fs/exists? reasoning-path)
+                        (slurp (str reasoning-path))
+                        "")}))
+      (finally
+        (babashka.fs/delete-tree tmp-root)))))
+
+(def ^:private single-subsystem-decomposition
+  [{:name "whole" :spec "Build the whole module per the full spec."}])
+
+(def ^:private two-subsystem-decomposition
+  [{:name "alpha" :spec "Alpha sub-spec."}
+   {:name "beta" :spec "Beta sub-spec."}])
+
+(deftest read-decomposition-test
+  ;; Tests parsing of DECOMPOSITION.json: a JSON array of subsystem objects
+  ;; ({"name": ..., "spec": ...}) in dependency order; the runner consumes
+  ;; only the "name" order. Plain name strings are tolerated; anything malformed
+  ;; returns nil (single-subsystem fallback) with a stderr warning, never
+  ;; a throw.
+  (testing "read-decomposition"
+    (let [tmp-root (str (babashka.fs/create-temp-dir))
+          challenge "rd-ch"
+          impl-dir (babashka.fs/path tmp-root "implementations" challenge)
+          decomp-path (babashka.fs/path impl-dir "DECOMPOSITION.json")
+          write! (fn [content]
+                   (babashka.fs/create-dirs impl-dir)
+                   (spit (str decomp-path) content))
+          read! (fn []
+                  (binding [*err* (java.io.StringWriter.)] ; silence warnings
+                    (read-decomposition tmp-root challenge)))]
+      (try
+        (testing "array of objects (primary shape) yields the name values"
+          (write! (json/generate-string [{:name "alpha" :spec "base state"}
+                                         {:name "beta" :spec "derived views"}]))
+          (is (= ["alpha" "beta"] (read!))))
+        (testing "array of name strings is tolerated"
+          (write! "[\"graph\", \"delivery\"]")
+          (is (= ["graph" "delivery"] (read!))))
+        (testing "names are trimmed"
+          (write! "[\" graph \", \"delivery\"]")
+          (is (= ["graph" "delivery"] (read!))))
+        (testing "duplicate names fall back to nil"
+          (write! "[\"graph\", \"graph\"]")
+          (is (nil? (read!))))
+        (testing "blank name falls back to nil"
+          (write! "[\"graph\", \"  \"]")
+          (is (nil? (read!))))
+        (testing "non-string, non-object entry falls back to nil"
+          (write! "[\"graph\", 42]")
+          (is (nil? (read!))))
+        (testing "empty array falls back to nil"
+          (write! "[]")
+          (is (nil? (read!))))
+        (testing "not-an-array falls back to nil"
+          (write! "{\"name\": \"graph\"}")
+          (is (nil? (read!))))
+        (testing "unparseable JSON falls back to nil"
+          (write! "[\"graph\"")
+          (is (nil? (read!))))
+        (testing "missing file falls back to nil"
+          (babashka.fs/delete decomp-path)
+          (is (nil? (read!))))
+        (finally
+          (babashka.fs/delete-tree tmp-root))))))
+
+(deftest phase-loop-single-subsystem-test
+  ;; A one-subsystem decomposition must collapse to the historical pipeline —
+  ;; no subsystem slug on any invocation — plus decompose and one full-spec
+  ;; review.
+  (testing "single-subsystem happy path"
+    (let [{:keys [result invocations transcripts reasoning]}
+          (simulate-phase-loop {:decomposition single-subsystem-decomposition})]
+      (is (= [[0 nil 1] [:decompose nil 1]
+              [1 nil 1] [2 nil 1] [3 nil 1] [4 nil 1] [5 nil 1] [6 nil 1] [7 nil 1]
+              [:full-spec-review nil 1]]
+             invocations)
+          "sequence = phase 0, decompose, phases 1-7 unsuffixed, full-spec review")
+      (is (= :pass (:status result)))
+      (is (= 1 (:iterations result)))
+      (testing "transcript filenames have NO subsystem segment (byte-identical to historical names)"
+        (is (some #(re-find #"-sim-ch-phase3\.jsonl$" %) transcripts))
+        (is (some #(re-find #"-sim-ch-phasedecompose\.jsonl$" %) transcripts))
+        (is (some #(re-find #"-sim-ch-phasefull-spec-review\.jsonl$" %) transcripts))
+        (is (not-any? #(re-find #"-whole-" %) transcripts)
+            "single-subsystem run must not tag transcripts with the slug"))
+      (testing "reasoning sentinels have NO subsystem tag"
+        (is (re-find #"=== PHASE 3 attempt 1 — " reasoning))
+        (is (re-find #"=== PHASE DECOMPOSE attempt 1 — " reasoning))
+        (is (not (re-find #"\[whole\]" reasoning))))))
+  (testing "missing DECOMPOSITION.json falls back to a single unsuffixed cycle"
+    (let [{:keys [result invocations]}
+          (simulate-phase-loop {:decomposition nil})]
+      (is (= [[0 nil 1] [:decompose nil 1]
+              [1 nil 1] [2 nil 1] [3 nil 1] [4 nil 1] [5 nil 1] [6 nil 1] [7 nil 1]
+              [:full-spec-review nil 1]]
+             invocations))
+      (is (= :pass (:status result)))))
+  (testing "malformed DECOMPOSITION.json falls back to a single unsuffixed cycle"
+    (let [{:keys [result invocations]}
+          (simulate-phase-loop {:decomposition {:not "a vector"}})]
+      (is (= [[0 nil 1] [:decompose nil 1]
+              [1 nil 1] [2 nil 1] [3 nil 1] [4 nil 1] [5 nil 1] [6 nil 1] [7 nil 1]
+              [:full-spec-review nil 1]]
+             invocations))
+      (is (= :pass (:status result))))))
+
+(deftest phase-loop-two-subsystem-test
+  ;; Two subsystems run phases 1-7 twice, in dependency order, with the slug
+  ;; on every cycle invocation. Gate counters must be FRESH per subsystem:
+  ;; each subsystem survives 3 consecutive gate-2 major-fails independently.
+  (testing "two-subsystem cycles with fresh gate counters"
+    (let [{:keys [result invocations transcripts reasoning]}
+          (simulate-phase-loop
+           {:decomposition two-subsystem-decomposition
+            ;; Gate 2 major-fails on attempts 1-3 and passes on attempt 4 —
+            ;; in BOTH subsystems. With shared counters the second subsystem
+            ;; would exceed the cap.
+            :verdict-fn (fn [phase-id _subsystem attempt]
+                          (if (= 2 phase-id)
+                            (if (<= attempt 3) :major-fail :pass)
+                            (passing-verdicts phase-id _subsystem attempt)))})
+          cycle-invs (filterv (fn [[p _ _]] (number? p)) invocations)
+          alpha-invs (filterv (fn [[_ s _]] (= "alpha" s)) invocations)
+          beta-invs  (filterv (fn [[_ s _]] (= "beta" s)) invocations)]
+      (is (= :pass (:status result)))
+      (is (= [[0 nil 1] [:decompose nil 1]] (take 2 invocations)))
+      (is (= [:full-spec-review nil 1] (last invocations)))
+      (testing "every phase 1-7 invocation carries a subsystem slug"
+        (is (every? (fn [[p s _]] (or (= 0 p) (contains? #{"alpha" "beta"} s)))
+                    cycle-invs)))
+      (testing "alpha's whole cycle runs before beta starts"
+        (let [subsystem-order (mapv second (remove (fn [[_ s _]] (nil? s)) invocations))]
+          (is (= ["alpha" "beta"] (vec (distinct subsystem-order))))
+          (is (apply <= (map {"alpha" 0 "beta" 1} subsystem-order))
+              "no alpha invocation after the first beta invocation")))
+      (testing "gate-2 retries happen independently in each subsystem"
+        (is (= [[1 "alpha" 1] [2 "alpha" 1] [1 "alpha" 2] [2 "alpha" 2]
+                [1 "alpha" 3] [2 "alpha" 3] [1 "alpha" 4] [2 "alpha" 4]
+                [3 "alpha" 1] [4 "alpha" 1] [5 "alpha" 1] [6 "alpha" 1] [7 "alpha" 1]]
+               alpha-invs))
+        (is (= [[1 "beta" 1] [2 "beta" 1] [1 "beta" 2] [2 "beta" 2]
+                [1 "beta" 3] [2 "beta" 3] [1 "beta" 4] [2 "beta" 4]
+                [3 "beta" 1] [4 "beta" 1] [5 "beta" 1] [6 "beta" 1] [7 "beta" 1]]
+               beta-invs)
+            "beta gets its own 3 retries — counters and attempts reset"))
+      (testing "transcript filenames carry the subsystem segment before the phase suffix"
+        (is (some #(re-find #"-sim-ch-alpha-phase3\.jsonl$" %) transcripts))
+        (is (some #(re-find #"-sim-ch-beta-phase3\.jsonl$" %) transcripts))
+        (is (some #(re-find #"-sim-ch-alpha-phase2-attempt4\.jsonl$" %) transcripts))
+        (is (some #(re-find #"-sim-ch-phasedecompose\.jsonl$" %) transcripts)
+            "decompose stage is never subsystem-tagged")
+        (is (some #(re-find #"-sim-ch-phasefull-spec-review\.jsonl$" %) transcripts)
+            "full-spec review is never subsystem-tagged"))
+      (testing "reasoning sentinels carry the subsystem tag"
+        (is (re-find #"=== PHASE 3 \[alpha\] attempt 1 — " reasoning))
+        (is (re-find #"=== PHASE 2 \[beta\] attempt 4 — " reasoning)))
+      (is (= 2 (:iterations result)) "one phase-3 invocation per subsystem"))))
+
+(deftest phase-loop-gate4-minor-fail-in-second-subsystem-test
+  ;; A gate-4 minor-fail inside subsystem 2 routes 3 → skip-4 → 5, exactly as
+  ;; in the historical single-module loop.
+  (testing "gate-4 minor-fail routes 3-then-skip-4 inside subsystem beta"
+    (let [{:keys [result invocations]}
+          (simulate-phase-loop
+           {:decomposition two-subsystem-decomposition
+            :verdict-fn (fn [phase-id subsystem attempt]
+                          (if (and (= 4 phase-id) (= "beta" subsystem) (= 1 attempt))
+                            :minor-fail
+                            (passing-verdicts phase-id subsystem attempt)))})
+          beta-invs (filterv (fn [[_ s _]] (= "beta" s)) invocations)]
+      (is (= :pass (:status result)))
+      (is (= [[1 "beta" 1] [2 "beta" 1] [3 "beta" 1] [4 "beta" 1]
+              [3 "beta" 2] [5 "beta" 1] [6 "beta" 1] [7 "beta" 1]]
+             beta-invs)
+          "after the minor-fail: phase 3 retry, then phase 4 skipped, straight to 5")
+      (is (= 1 (count (filterv (fn [[p s _]] (and (= 4 p) (= "beta" s))) invocations)))
+          "phase 4 runs exactly once for beta"))))
+
+(deftest phase-loop-full-spec-review-fix-test
+  ;; A failed review triggers a fix session and a fresh re-review; a passing
+  ;; re-review passes the run.
+  (testing "review fail → fix → review pass"
+    (let [{:keys [result invocations]}
+          (simulate-phase-loop
+           {:decomposition single-subsystem-decomposition
+            :verdict-fn (fn [phase-id subsystem attempt]
+                          (if (= :full-spec-review phase-id)
+                            (if (= 1 attempt) :fail :pass)
+                            (passing-verdicts phase-id subsystem attempt)))})]
+      (is (= :pass (:status result)))
+      (is (= [[:full-spec-review nil 1] [:full-spec-fix nil 1] [:full-spec-review nil 2]]
+             (vec (take-last 3 invocations)))))))
+
+(deftest phase-loop-full-spec-review-cap-test
+  ;; A review that keeps failing exhausts the 3 review→fix rounds and fails
+  ;; the run.
+  (testing "review fail x4 exceeds the cap"
+    (let [{:keys [result invocations]}
+          (simulate-phase-loop
+           {:decomposition single-subsystem-decomposition
+            :verdict-fn (fn [phase-id subsystem attempt]
+                          (if (= :full-spec-review phase-id)
+                            :fail
+                            (passing-verdicts phase-id subsystem attempt)))})]
+      (is (= :fail (:status result)))
+      (is (re-find #"Full-spec review still failing after 3" (:failure-reason result)))
+      (is (= 4 (count (filterv (fn [[p _ _]] (= :full-spec-review p)) invocations)))
+          "reviews run 4 times (initial + one per fix round)")
+      (is (= 3 (count (filterv (fn [[p _ _]] (= :full-spec-fix p)) invocations)))
+          "fix sessions run 3 times (the cap)"))))
+
+(deftest phase-loop-subsystem-gate-cap-test
+  ;; A gate-2 cap blowout in subsystem 1 fails the whole run naming the
+  ;; subsystem; subsystem 2 and the full-spec review never run.
+  (testing "subsystem-1 gate-2 cap exceeded"
+    (let [{:keys [result invocations]}
+          (simulate-phase-loop
+           {:decomposition two-subsystem-decomposition
+            :verdict-fn (fn [phase-id subsystem attempt]
+                          (if (= 2 phase-id)
+                            :major-fail
+                            (passing-verdicts phase-id subsystem attempt)))})]
+      (is (= :fail (:status result)))
+      (is (re-find #"\[subsystem alpha\]" (:failure-reason result))
+          "failure reason names the subsystem")
+      (is (re-find #"Phase 2 failed validation 4 times consecutively" (:failure-reason result)))
+      (is (empty? (filterv (fn [[_ s _]] (= "beta" s)) invocations))
+          "subsystem beta never runs")
+      (is (empty? (filterv (fn [[p _ _]] (= :full-spec-review p)) invocations))
+          "full-spec review never runs"))))
+
 (let [{:keys [fail error]} (run-tests)]
   (System/exit (if (zero? (+ fail error)) 0 1)))

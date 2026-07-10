@@ -4,6 +4,7 @@
          '[babashka.fs :as fs]
          '[babashka.process :as p]
          '[cheshire.core :as json]
+         '[clojure.edn :as edn]
          '[clojure.string :as str]
          '[clojure.java.io :as io]
          '[babashka.tasks :as tasks])
@@ -163,24 +164,44 @@
   "Tools the agent is allowed to use during challenge runs."
   "Read,Write,Edit,Glob,Grep,Bash,Skill")
 
+(defn phase-id-str
+  "Render a phase id for command lines, sentinels, and filenames.
+  Numbered phases render as their number; keyword stages (:decompose,
+  :full-spec-review, :full-spec-fix) render as their name."
+  [phase-id]
+  (if (keyword? phase-id) (name phase-id) (str phase-id)))
+
+(defn- phase-invocation-args
+  "Arguments passed to /challenge-phase: `<name> <phase-id>` plus the
+  subsystem slug when one is set (multi-subsystem runs only)."
+  [challenge-name phase-id subsystem]
+  (str challenge-name " " (phase-id-str phase-id)
+       (when subsystem (str " " subsystem))))
+
 (defn claude-phase-cmd
   "Build the CLI command to invoke Claude for a single phase of a challenge."
-  [challenge-name phase-id _project-root model reasoning]
-  (cond-> ["claude" "--print" "--output-format" "stream-json" "--verbose"
-           "--allowedTools" allowed-tools
-           "-p" (str "/challenge-phase " challenge-name " " phase-id)]
-    model     (into ["--model" model])
-    reasoning (into ["--effort" reasoning])))
+  ([challenge-name phase-id project-root model reasoning]
+   (claude-phase-cmd challenge-name phase-id project-root model reasoning nil))
+  ([challenge-name phase-id _project-root model reasoning subsystem]
+   (cond-> ["claude" "--print" "--output-format" "stream-json" "--verbose"
+            "--allowedTools" allowed-tools
+            "-p" (str "/challenge-phase "
+                      (phase-invocation-args challenge-name phase-id subsystem))]
+     model     (into ["--model" model])
+     reasoning (into ["--effort" reasoning]))))
 
 (defn codex-phase-cmd
   "Build the CLI command to invoke Codex for a single phase of a challenge.
   Note: requires a $challenge-phase command in the codex skills setup."
-  [challenge-name phase-id project-root model reasoning]
-  (cond-> ["codex" "exec" "--json" "--dangerously-bypass-approvals-and-sandbox"
-           "-C" project-root]
-    model     (into ["--model" model])
-    reasoning (into ["-c" (str "model_reasoning_effort=" reasoning)])
-    true      (conj (str "$challenge-phase " challenge-name " " phase-id))))
+  ([challenge-name phase-id project-root model reasoning]
+   (codex-phase-cmd challenge-name phase-id project-root model reasoning nil))
+  ([challenge-name phase-id project-root model reasoning subsystem]
+   (cond-> ["codex" "exec" "--json" "--dangerously-bypass-approvals-and-sandbox"
+            "-C" project-root]
+     model     (into ["--model" model])
+     reasoning (into ["-c" (str "model_reasoning_effort=" reasoning)])
+     true      (conj (str "$challenge-phase "
+                          (phase-invocation-args challenge-name phase-id subsystem))))))
 
 (def agents
   {:claude {:phase-cmd claude-phase-cmd}
@@ -449,28 +470,36 @@
 
 (defn save-transcript!
   "Save JSONL agent output to ../transcripts relative to project-root.
-  Filename: {date}-{time}-{agent}[-{model}][-{reasoning}]-{challenge}-phase{N}[-attempt{K}].jsonl
+  Filename: {date}-{time}-{agent}[-{model}][-{reasoning}]-{challenge}[-{subsystem}]-phase{ID}[-attempt{K}].jsonl
+  The {subsystem} segment is present only on multi-subsystem runs (n > 1).
+  {ID} is the phase number for numbered phases, or the stage name for keyword
+  stages (decompose, full-spec-review, full-spec-fix).
   All transcripts of one challenge run share the same {date}-{time} prefix
   (the run-start-time), so they can be grouped as a unit. Returns the path written."
-  [project-root agent-name model reasoning challenge-name content
-   phase-id attempt run-start-time]
-  (let [t               (or run-start-time (java.time.LocalDateTime/now))
-        date-str        (.format t (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd"))
-        time-str        (.format t (java.time.format.DateTimeFormatter/ofPattern "HHmmss"))
-        transcripts-dir (fs/path project-root ".." "transcripts")
-        base            (cond
-                          (and model reasoning) (format "%s-%s-%s-%s-%s" date-str time-str agent-name model reasoning)
-                          model                 (format "%s-%s-%s-%s" date-str time-str agent-name model)
-                          :else                 (format "%s-%s-%s" date-str time-str agent-name))
-        phase-suffix    (cond
-                          (and phase-id (> attempt 1)) (format "-phase%d-attempt%d" phase-id attempt)
-                          phase-id                     (format "-phase%d" phase-id)
-                          :else                        "")
-        filename        (str base "-" challenge-name phase-suffix ".jsonl")
-        path            (str (fs/path transcripts-dir filename))]
-    (fs/create-dirs transcripts-dir)
-    (spit path content)
-    path))
+  ([project-root agent-name model reasoning challenge-name content
+    phase-id attempt run-start-time]
+   (save-transcript! project-root agent-name model reasoning challenge-name
+                     content phase-id attempt run-start-time nil))
+  ([project-root agent-name model reasoning challenge-name content
+    phase-id attempt run-start-time subsystem]
+   (let [t               (or run-start-time (java.time.LocalDateTime/now))
+         date-str        (.format t (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd"))
+         time-str        (.format t (java.time.format.DateTimeFormatter/ofPattern "HHmmss"))
+         transcripts-dir (fs/path project-root ".." "transcripts")
+         base            (cond
+                           (and model reasoning) (format "%s-%s-%s-%s-%s" date-str time-str agent-name model reasoning)
+                           model                 (format "%s-%s-%s-%s" date-str time-str agent-name model)
+                           :else                 (format "%s-%s-%s" date-str time-str agent-name))
+         sub-segment     (if subsystem (str "-" subsystem) "")
+         phase-suffix    (cond
+                           (and phase-id (> attempt 1)) (format "%s-phase%s-attempt%d" sub-segment (phase-id-str phase-id) attempt)
+                           phase-id                     (format "%s-phase%s" sub-segment (phase-id-str phase-id))
+                           :else                        "")
+         filename        (str base "-" challenge-name phase-suffix ".jsonl")
+         path            (str (fs/path transcripts-dir filename))]
+     (fs/create-dirs transcripts-dir)
+     (spit path content)
+     path)))
 
 ;;; Core runner
 
@@ -985,30 +1014,41 @@
 (defn append-reasoning-sentinel!
   "Append a phase sentinel to the challenge's REASONING.md. Each phase
   invocation is instructed to append its reasoning below the sentinel, so
-  entries can be attributed to the phase/attempt that wrote them."
-  [project-root challenge-name phase-id attempt]
-  (let [impl-dir (fs/path project-root "implementations" challenge-name)
-        path     (fs/path impl-dir "REASONING.md")
-        ts       (.format (java.time.LocalDateTime/now)
-                          (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm:ss"))]
-    (fs/create-dirs impl-dir)
-    (spit (str path)
-          (format "\n=== PHASE %d attempt %d — %s ===\n\n" phase-id attempt ts)
-          :append true)))
+  entries can be attributed to the phase/attempt that wrote them. On
+  multi-subsystem runs the sentinel carries the subsystem slug in brackets:
+  `=== PHASE 3 [some-subsystem] attempt 2 — <ts> ===`."
+  ([project-root challenge-name phase-id attempt]
+   (append-reasoning-sentinel! project-root challenge-name phase-id attempt nil))
+  ([project-root challenge-name phase-id attempt subsystem]
+   (let [impl-dir (fs/path project-root "implementations" challenge-name)
+         path     (fs/path impl-dir "REASONING.md")
+         ts       (.format (java.time.LocalDateTime/now)
+                           (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm:ss"))
+         phase-label (str/upper-case (phase-id-str phase-id))
+         sub-label   (if subsystem (str " [" subsystem "]") "")]
+     (fs/create-dirs impl-dir)
+     (spit (str path)
+           (format "\n=== PHASE %s%s attempt %d — %s ===\n\n" phase-label sub-label attempt ts)
+           :append true))))
 
 (defn run-phase!
   "Invoke one phase of a challenge. Clamps the per-call timeout to whatever's
-  left in the overall run budget. Returns a result map with everything the
-  caller needs to decide next steps and accumulate per-phase telemetry."
-  [agent-fns challenge-name phase-id attempt
+  left in the overall run budget. `subsystem` is nil on single-subsystem runs;
+  on multi-subsystem runs it is the slug of the subsystem being built and is
+  threaded into the /challenge-phase invocation, the reasoning sentinel, and
+  the transcript filename. Returns a result map with everything the caller
+  needs to decide next steps and accumulate per-phase telemetry."
+  [agent-fns challenge-name phase-id attempt subsystem
    project-root agent-name model reasoning run-start-time run-start-millis]
-  (append-reasoning-sentinel! project-root challenge-name phase-id attempt)
-  (let [cmd ((:phase-cmd agent-fns) challenge-name phase-id project-root model reasoning)
+  (append-reasoning-sentinel! project-root challenge-name phase-id attempt subsystem)
+  (let [cmd ((:phase-cmd agent-fns) challenge-name phase-id project-root model reasoning subsystem)
         remaining (long (time-remaining-s run-start-millis))
         effective-timeout (min *outer-timeout-s* remaining)
+        phase-label (str (phase-id-str phase-id)
+                         (when subsystem (str " [" subsystem "]")))
         _ (when *verbose*
-            (println (format "  Phase %d (attempt %d) starting (budget remaining: %ds, this-call cap: %ds)..."
-                             phase-id attempt remaining effective-timeout)))
+            (println (format "  Phase %s (attempt %d) starting (budget remaining: %ds, this-call cap: %ds)..."
+                             phase-label attempt remaining effective-timeout)))
         {:keys [exit out err duration-s timed-out?]}
         (binding [*outer-timeout-s* effective-timeout]
           (invoke-command! cmd project-root))
@@ -1016,18 +1056,19 @@
         verdict (parse-phase-verdict combined)
         transcript-path (save-transcript! project-root agent-name model reasoning
                                           challenge-name out phase-id attempt
-                                          run-start-time)
+                                          run-start-time subsystem)
         token-usage (parse-token-usage out)
         cost (compute-cost token-usage (model->pricing model))
         tool-uses (parse-tool-uses out)
         skills-used (parse-skills-used out)
         skill-refs-used (parse-skill-refs-used out)]
     (when *verbose*
-      (println (format "  Phase %d (attempt %d) finished: exit=%d duration=%ds verdict=%s"
-                       phase-id attempt exit duration-s
+      (println (format "  Phase %s (attempt %d) finished: exit=%d duration=%ds verdict=%s"
+                       phase-label attempt exit duration-s
                        (if verdict (name verdict) "n/a"))))
     {:phase-id phase-id
      :attempt attempt
+     :subsystem subsystem
      :exit exit
      :timed-out? (boolean timed-out?)
      :duration-s duration-s
@@ -1055,18 +1096,73 @@
      :skills-used     all-skills
      :skill-refs-used all-skill-refs}))
 
-(defn phase-loop!
-  "Drive the phase loop. Returns a map:
-  {:status :pass | :fail | :timeout
-   :iterations int            ;; number of phase-3 invocations (impl attempts)
-   :phase-results [...]       ;; one per agent invocation
-   :test-output str           ;; final test output (when known)
-   :failure-reason str?       ;; populated on :fail/:timeout
-   :transcript-path str       ;; path to the most recent agent transcript}
+(defn phase3-iterations
+  "Total phase-3 invocations (impl attempts) across a run's phase results,
+  summed across all subsystems. Minimum 1."
+  [results]
+  (max 1 (count (filter #(= 3 (:phase-id %)) results))))
+
+(defn read-decomposition
+  "Read implementations/<challenge>/DECOMPOSITION.json written by the
+  decompose stage. The expected shape is a JSON array of subsystem objects in
+  dependency order, e.g. [{\"name\": \"graph\", \"spec\": \"...\"}, ...]; the
+  runner consumes only the \"name\" order (phase agents read the \"spec\"
+  entries). Plain name strings are also tolerated. Returns a non-empty vector
+  of distinct, trimmed, non-empty name strings, or nil when the file is
+  missing, unparseable, empty, or malformed — the caller then treats the
+  module as a single subsystem. Never throws."
+  [project-root challenge-name]
+  (let [path (fs/path project-root "implementations" challenge-name "DECOMPOSITION.json")
+        warn! (fn [msg]
+                (binding [*out* *err*]
+                  (println (format "WARN: %s — treating %s as a single subsystem."
+                                   msg challenge-name))))
+        entry-name (fn [entry]
+                     (let [n (cond
+                               (string? entry) entry
+                               (map? entry) (:name entry)
+                               :else nil)]
+                       (when (string? n)
+                         (let [trimmed (str/trim n)]
+                           (when (seq trimmed) trimmed)))))]
+    (if-not (fs/exists? path)
+      (do (warn! (str "DECOMPOSITION.json missing at " path)) nil)
+      ;; cheshire parses top-level JSON arrays lazily — force realization
+      ;; inside the try so malformed JSON is caught here, not downstream.
+      (let [parsed (try (let [p (json/parse-string (slurp (str path)) true)]
+                          (if (seqable? p) (doall p) p))
+                        (catch Exception _ ::unparseable))]
+        (cond
+          (= ::unparseable parsed)
+          (do (warn! "DECOMPOSITION.json is unparseable") nil)
+
+          (not (sequential? parsed))
+          (do (warn! "DECOMPOSITION.json is not an array of subsystem entries") nil)
+
+          (empty? parsed)
+          (do (warn! "DECOMPOSITION.json is empty") nil)
+
+          :else
+          (let [names (mapv entry-name parsed)]
+            (cond
+              (some nil? names)
+              (do (warn! "DECOMPOSITION.json entries must be non-empty subsystem name strings") nil)
+
+              (not (apply distinct? names))
+              (do (warn! "DECOMPOSITION.json subsystem names must be distinct") nil)
+
+              :else names)))))))
+
+(defn run-subsystem-phases!
+  "Drive phases 1→7 for one subsystem. `subsystem` is nil on single-subsystem
+  runs — invocations and artifacts are then identical to a run without
+  decomposition. Gate retry counters and skip flags are FRESH per call.
+  Returns {:status :pass|:fail|:timeout, :phase-results [...],
+  :failure-reason str?, :transcript-path str}.
 
   Phase routing:
-  - 0 → 1 → 2
-  - 2 pass → 3, 2 fail → 1   (count toward gate 2's retry cap)
+  - 1 → 2
+  - 2 pass|minor-fail → 3, 2 major-fail → 1   (count toward gate 2's retry cap)
   - 3 → 4 (unless skip-4 flag set, then 3 → 5)
   - 4 pass → 5
   - 4 minor-fail → 3 (set skip-4 to true; next time through, skip phase 4)
@@ -1084,10 +1180,10 @@
   An overall wall-clock budget (*overall-timeout-s*) caps the entire run.
   Checked at every loop iteration; per-call subprocess timeouts are clamped
   to the remaining budget."
-  [agent-fns challenge-name project-root agent-name model reasoning
+  [agent-fns challenge-name subsystem project-root agent-name model reasoning
    run-start-time run-start-millis]
-  (loop [phase-id 0
-         attempts {0 1, 1 1, 2 1, 3 1, 4 1, 5 1, 6 1, 7 1}
+  (loop [phase-id 1
+         attempts {1 1, 2 1, 3 1, 4 1, 5 1, 6 1, 7 1}
          skip-flags {4 false}
          validation-fail-counts {2 0, 4 0, 6 0}
          results []]
@@ -1095,7 +1191,6 @@
       ;; Overall budget exhausted — abort.
       (<= (time-remaining-s run-start-millis) 0)
       {:status :timeout
-       :iterations (max 1 (dec (get attempts 3 1)))
        :phase-results results
        :failure-reason (format "Overall challenge time budget (%ds) exceeded before phase %d."
                                *overall-timeout-s* phase-id)
@@ -1107,7 +1202,7 @@
 
       :else
       (let [attempt   (get attempts phase-id 1)
-            r         (run-phase! agent-fns challenge-name phase-id attempt
+            r         (run-phase! agent-fns challenge-name phase-id attempt subsystem
                                   project-root agent-name model reasoning
                                   run-start-time run-start-millis)
             attempts' (assoc attempts phase-id (inc attempt))
@@ -1115,14 +1210,12 @@
         (cond
           (:timed-out? r)
           {:status :timeout
-           :iterations (max 1 (dec (get attempts' 3 1)))
            :phase-results results'
            :failure-reason (format "Phase %d (attempt %d) timed out." phase-id attempt)
            :transcript-path (:transcript-path r)}
 
           (not= 0 (:exit r))
           {:status :fail
-           :iterations (max 1 (dec (get attempts' 3 1)))
            :phase-results results'
            :failure-reason (format "Phase %d (attempt %d) exited %d." phase-id attempt (:exit r))
            :transcript-path (:transcript-path r)}
@@ -1145,7 +1238,6 @@
                 (do (save-attempt! project-root challenge-name)
                     (recur 1 attempts' skip-flags vfc' results'))
                 {:status :fail
-                 :iterations (max 1 (dec (get attempts' 3 1)))
                  :phase-results results'
                  :failure-reason (format "Phase 2 failed validation %d times consecutively."
                                          (inc prior-fails))
@@ -1153,7 +1245,6 @@
 
             :else
             {:status :fail
-             :iterations (max 1 (dec (get attempts' 3 1)))
              :phase-results results'
              :failure-reason "Phase 2 did not emit PHASE_VALIDATION verdict."
              :transcript-path (:transcript-path r)})
@@ -1191,7 +1282,6 @@
                 (do (save-attempt! project-root challenge-name)
                     (recur next-phase attempts' skip' vfc' results'))
                 {:status :fail
-                 :iterations (max 1 (dec (get attempts' 3 1)))
                  :phase-results results'
                  :failure-reason (format "Phase %d failed validation %d times consecutively."
                                          phase-id (inc prior-fails))
@@ -1199,7 +1289,6 @@
 
             :else
             {:status :fail
-             :iterations (max 1 (dec (get attempts' 3 1)))
              :phase-results results'
              :failure-reason (format "Phase %d did not emit a valid PHASE_VALIDATION verdict (got %s)."
                                      phase-id (:verdict r))
@@ -1212,20 +1301,17 @@
           (cond
             (= :pass (:verdict r))
             {:status :pass
-             :iterations (max 1 (dec (get attempts' 3 1)))
              :phase-results results'
              :transcript-path (:transcript-path r)}
 
             (= :fail (:verdict r))
             {:status :fail
-             :iterations (max 1 (dec (get attempts' 3 1)))
              :phase-results results'
              :failure-reason "Phase 7 (finish) emitted FAIL — agent could not get tests passing."
              :transcript-path (:transcript-path r)}
 
             :else
             {:status :fail
-             :iterations (max 1 (dec (get attempts' 3 1)))
              :phase-results results'
              :failure-reason (format "Phase 7 did not emit a valid PHASE_VALIDATION verdict (got %s)."
                                      (:verdict r))
@@ -1235,6 +1321,211 @@
           :else
           (recur (inc phase-id) attempts' skip-flags
                  validation-fail-counts results'))))))
+
+(def full-spec-review-cap
+  "Max number of review→fix rounds for the full-spec-review stage. The review
+  re-runs fresh after each fix; if the review still fails after the last
+  allowed fix, the stage fails."
+  3)
+
+(defn run-full-spec-review!
+  "Run the full-spec-review stage: an adversarial fresh-context review of the
+  ENTIRE module + test suite against the ENTIRE original spec. Always runs,
+  even on single-subsystem runs. On a fail verdict a full-spec-fix session
+  applies every FAIL item from FULL_SPEC_REVIEW.md, then the review re-runs
+  fresh. Up to full-spec-review-cap fix rounds. The review verdict is the sole
+  gate — the fix session's verdict is telemetry only (a bad fix is caught by
+  the re-review). Returns {:status :pass|:fail|:timeout, :phase-results [...],
+  :failure-reason str?, :transcript-path str}."
+  [agent-fns challenge-name project-root agent-name model reasoning
+   run-start-time run-start-millis]
+  (loop [review-attempt 1
+         fix-rounds 0
+         results []]
+    (if (<= (time-remaining-s run-start-millis) 0)
+      {:status :timeout
+       :phase-results results
+       :failure-reason (format "Overall challenge time budget (%ds) exceeded before full-spec-review."
+                               *overall-timeout-s*)
+       :transcript-path (:transcript-path (last results))}
+      (let [r (run-phase! agent-fns challenge-name :full-spec-review review-attempt nil
+                          project-root agent-name model reasoning
+                          run-start-time run-start-millis)
+            results' (conj results r)]
+        (cond
+          (:timed-out? r)
+          {:status :timeout
+           :phase-results results'
+           :failure-reason (format "Phase full-spec-review (attempt %d) timed out." review-attempt)
+           :transcript-path (:transcript-path r)}
+
+          (not= 0 (:exit r))
+          {:status :fail
+           :phase-results results'
+           :failure-reason (format "Phase full-spec-review (attempt %d) exited %d."
+                                   review-attempt (:exit r))
+           :transcript-path (:transcript-path r)}
+
+          (= :pass (:verdict r))
+          {:status :pass
+           :phase-results results'
+           :transcript-path (:transcript-path r)}
+
+          (= :fail (:verdict r))
+          (if (< fix-rounds full-spec-review-cap)
+            (let [fix-attempt (inc fix-rounds)
+                  f (run-phase! agent-fns challenge-name :full-spec-fix fix-attempt nil
+                                project-root agent-name model reasoning
+                                run-start-time run-start-millis)
+                  results'' (conj results' f)]
+              (cond
+                (:timed-out? f)
+                {:status :timeout
+                 :phase-results results''
+                 :failure-reason (format "Phase full-spec-fix (attempt %d) timed out." fix-attempt)
+                 :transcript-path (:transcript-path f)}
+
+                (not= 0 (:exit f))
+                {:status :fail
+                 :phase-results results''
+                 :failure-reason (format "Phase full-spec-fix (attempt %d) exited %d."
+                                         fix-attempt (:exit f))
+                 :transcript-path (:transcript-path f)}
+
+                :else
+                (recur (inc review-attempt) (inc fix-rounds) results'')))
+            {:status :fail
+             :phase-results results'
+             :failure-reason (format "Full-spec review still failing after %d review→fix rounds."
+                                     fix-rounds)
+             :transcript-path (:transcript-path r)})
+
+          :else
+          {:status :fail
+           :phase-results results'
+           :failure-reason (format "Full-spec review did not emit a valid PHASE_VALIDATION verdict (got %s)."
+                                   (:verdict r))
+           :transcript-path (:transcript-path r)})))))
+
+(defn phase-loop!
+  "Drive the full challenge pipeline. Returns a map:
+  {:status :pass | :fail | :timeout
+   :iterations int            ;; total phase-3 invocations across all subsystems
+   :phase-results [...]       ;; one per agent invocation (all stages included)
+   :test-output str           ;; final test output (when known)
+   :failure-reason str?       ;; populated on :fail/:timeout
+   :transcript-path str       ;; path to the most recent agent transcript}
+
+  Pipeline:
+  - Phase 0 (implicit spec)
+  - decompose stage: the agent writes DECOMPOSITION.json; the runner reads it
+    to determine subsystems. Missing/unparseable/empty file → the whole module
+    is one subsystem (warned, never fatal).
+  - phases 1→7 once per subsystem, in DECOMPOSITION.json order, with fresh gate counters and
+    skip flags per subsystem (see run-subsystem-phases!). On multi-subsystem
+    runs (n > 1) every invocation carries the subsystem slug as a third
+    /challenge-phase argument; when n == 1 no slug is passed and the cycle is
+    identical to a run without decomposition. A cap-exceeded gate or phase-7
+    fail in any subsystem fails the whole run, naming the subsystem.
+  - full-spec-review stage (ALWAYS, even when n == 1): see
+    run-full-spec-review!.
+
+  Overall run pass = every subsystem's phase 7 passes AND full-spec-review
+  passes.
+
+  An overall wall-clock budget (*overall-timeout-s*) caps the entire run.
+  Checked before every stage; per-call subprocess timeouts are clamped to the
+  remaining budget."
+  [agent-fns challenge-name project-root agent-name model reasoning
+   run-start-time run-start-millis]
+  (let [run-stage! (fn [phase-id]
+                     (run-phase! agent-fns challenge-name phase-id 1 nil
+                                 project-root agent-name model reasoning
+                                 run-start-time run-start-millis))
+        ;; nil when the stage invocation completed (exit 0, no timeout).
+        stage-failure (fn [r results]
+                        (cond
+                          (:timed-out? r)
+                          {:status :timeout
+                           :iterations (phase3-iterations results)
+                           :phase-results results
+                           :failure-reason (format "Phase %s (attempt %d) timed out."
+                                                   (phase-id-str (:phase-id r)) (:attempt r))
+                           :transcript-path (:transcript-path r)}
+
+                          (not= 0 (:exit r))
+                          {:status :fail
+                           :iterations (phase3-iterations results)
+                           :phase-results results
+                           :failure-reason (format "Phase %s (attempt %d) exited %d."
+                                                   (phase-id-str (:phase-id r)) (:attempt r) (:exit r))
+                           :transcript-path (:transcript-path r)}))
+        budget-exceeded (fn [results stage-label]
+                          (when (<= (time-remaining-s run-start-millis) 0)
+                            {:status :timeout
+                             :iterations (phase3-iterations results)
+                             :phase-results results
+                             :failure-reason (format "Overall challenge time budget (%ds) exceeded before %s."
+                                                     *overall-timeout-s* stage-label)
+                             :transcript-path (:transcript-path (last results))}))]
+    (or
+     ;; Stage: phase 0 (implicit spec).
+     (budget-exceeded [] "phase 0")
+     (let [r0 (run-stage! 0)
+           results [r0]]
+       (or
+        (stage-failure r0 results)
+        ;; Stage: decompose.
+        (budget-exceeded results "stage decompose")
+        (let [rd (run-stage! :decompose)
+              results (conj results rd)]
+          (or
+           (stage-failure rd results)
+           ;; Determine subsystems from DECOMPOSITION.json. n == 1 (including a
+           ;; missing/invalid .edn) → a single cycle with no subsystem slug.
+           (let [subsystems (read-decomposition project-root challenge-name)
+                 multi? (> (count subsystems) 1)
+                 slugs (if multi? subsystems [nil])]
+             (when (and *verbose* multi?)
+               (println (format "  Decomposition: %d subsystems: %s"
+                                (count slugs) (str/join ", " slugs))))
+             ;; Stage: phases 1→7 per subsystem, in .edn order.
+             (loop [remaining slugs
+                    results results]
+               (if (seq remaining)
+                 (let [slug (first remaining)
+                       sub-result (run-subsystem-phases!
+                                   agent-fns challenge-name slug project-root
+                                   agent-name model reasoning
+                                   run-start-time run-start-millis)
+                       results' (into results (:phase-results sub-result))]
+                   (if (= :pass (:status sub-result))
+                     (recur (rest remaining) results')
+                     ;; Any subsystem failure/timeout fails the whole run,
+                     ;; naming the subsystem on multi-subsystem runs.
+                     {:status (:status sub-result)
+                      :iterations (phase3-iterations results')
+                      :phase-results results'
+                      :failure-reason (if slug
+                                        (format "[subsystem %s] %s" slug (:failure-reason sub-result))
+                                        (:failure-reason sub-result))
+                      :transcript-path (or (:transcript-path sub-result)
+                                           (:transcript-path (last results')))}))
+                 ;; Stage: full-spec review (always runs).
+                 (or
+                  (budget-exceeded results "stage full-spec-review")
+                  (let [review-result (run-full-spec-review!
+                                       agent-fns challenge-name project-root
+                                       agent-name model reasoning
+                                       run-start-time run-start-millis)
+                        results' (into results (:phase-results review-result))]
+                    (cond-> {:status (:status review-result)
+                             :iterations (phase3-iterations results')
+                             :phase-results results'
+                             :transcript-path (or (:transcript-path review-result)
+                                                  (:transcript-path (last results')))}
+                      (:failure-reason review-result)
+                      (assoc :failure-reason (:failure-reason review-result)))))))))))))))
 
 (defn run-challenge
   "Run a single challenge through the agent. Returns a result map:
@@ -1777,4 +2068,4 @@
 
 (when (= *file* (System/getProperty "babashka.file"))
   (-main *command-line-args*)
-  (shell "bash" "-c" "for i in $(seq 10); do printf '\\a'; sleep 0.3; done"))
+  (tasks/shell "bash" "-c" "for i in $(seq 10); do printf '\\a'; sleep 0.3; done"))

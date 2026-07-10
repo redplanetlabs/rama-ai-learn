@@ -72,10 +72,9 @@ second, and follows and unfollows at around 100 per second.
 
 ## Protocol
 
-Your implementation must satisfy BOTH
-`social-graph-and-fanout.protocol/SocialGraph` and
-`social-graph-and-fanout.protocol/Fanout`. See
-`src/social_graph_and_fanout/protocol.clj` for the contracts.
+Your implementation must satisfy
+`social-graph-and-fanout.protocol/SocialApp`. See
+`src/social_graph_and_fanout/protocol.clj` for the contract.
 
 ## Contract: `create-module`
 
@@ -83,13 +82,12 @@ Your namespace must provide a `create-module` function returning:
 
 ```clojure
 {:module      <RamaModule instance>
- :wrap-client (fn [ipc] -> <implementation of both SocialGraph and Fanout>)}
+ :wrap-client (fn [ipc] -> <SocialApp implementation>)}
 ```
 
 - `:module` — your module.
-- `:wrap-client` — given a started IPC cluster, returns a single reified
-  implementation of both `social-graph-and-fanout.protocol/SocialGraph`
-  and `social-graph-and-fanout.protocol/Fanout`.
+- `:wrap-client` — given a started IPC cluster, returns a reified
+  `social-graph-and-fanout.protocol/SocialApp` implementation.
 
 You choose all internal depot/PState/topology names freely.
 
