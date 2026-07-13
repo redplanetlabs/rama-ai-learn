@@ -210,6 +210,50 @@ def cmd_final_write(lines, args):
     print(f"=== FINAL {fp} ({len(content)} chars, last touched at line {i}) ===")
     print(content)
 
+def cmd_decomposition(lines, args):
+    """Pretty-print DECOMPOSITION.json: each subsystem's name and spec as
+    plain text (unescapes the JSON string \\n)."""
+    final = _final_file_content(lines, 'DECOMPOSITION.json')
+    if final is not None:
+        _, fp, content = final
+    else:
+        # Fallback: the agent may have written the file via a Bash heredoc.
+        content = None
+        for line in lines:
+            msg = line.get('message', {})
+            for block in msg.get('content', []):
+                if not isinstance(block, dict) or block.get('type') != 'tool_use':
+                    continue
+                if block.get('name') != 'Bash':
+                    continue
+                cmd = block.get('input', {}).get('command', '')
+                if 'DECOMPOSITION.json' not in cmd:
+                    continue
+                m = re.search(r"<<\s*'?(\w+)'?\n(.*?)\n\1", cmd, re.DOTALL)
+                if m:
+                    try:
+                        json.loads(m.group(2))
+                        content = m.group(2)  # keep last parseable candidate
+                    except Exception:
+                        pass
+        if content is None:
+            print("(no DECOMPOSITION.json write found in this transcript)")
+            return
+    try:
+        entries = json.loads(content)
+    except Exception as e:
+        print(f"(DECOMPOSITION.json is unparseable: {e})")
+        print(content)
+        return
+    for entry in entries:
+        name = entry.get('name') if isinstance(entry, dict) else str(entry)
+        print("=" * 72)
+        print(f"SUBSYSTEM: {name}")
+        print("=" * 72)
+        if isinstance(entry, dict) and entry.get('spec'):
+            print(entry['spec'])
+        print()
+
 def _final_file_content(lines, name, require=None):
     """Replay Write + Edits for files matching name to get final content."""
     files = {}  # fp -> (last-line-index, content)
@@ -698,6 +742,7 @@ COMMANDS = {
     'edits': cmd_edits,
     'module': cmd_module,
     'final-write': cmd_final_write,
+    'decomposition': cmd_decomposition,
     'test-runs': cmd_test_runs,
     'reads': cmd_reads,
     'todos': cmd_todos,

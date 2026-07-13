@@ -1,76 +1,38 @@
 # Decompose: Sub-problem Planning
 
-Partition the module into subsystems, each of which will get its own full plan→implement→test build cycle, in dependency order. Produce `DECOMPOSITION.json`.
+Split the module into sub-problems, each getting its own full plan→implement→test build cycle, in dependency order. Each sub-problem's spec must stand alone as a complete problem statement: a session reading only that spec builds that part correctly, and the parts together satisfy the whole spec. Produce `DECOMPOSITION.json`.
 
-**Default: ONE subsystem covering the whole module.** Splitting is the exception. A wrong split is far more expensive than no split — it forces later sessions to build against a boundary that doesn't hold.
+**Default: ONE subsystem.** Split only where the problem naturally layers — later sub-problems read and build on what earlier ones store, never the reverse. Do not split out trivial parts whose design is obvious; a build cycle is expensive — fold them into the sub-problem that uses them.
 
-## Inputs
+Inputs: the user-facing spec, any interface/contract files, `<impl-root>/IMPLICIT_SPEC.md`, this skill.
 
-- The user-facing spec (e.g. README, problem statement) — read it in full
-- Any interfaces, type signatures, or API definitions that define the contract
-- `<impl-root>/IMPLICIT_SPEC.md`
-- This skill (`SKILL.md`)
+## Principles
 
-## Split rules
-
-Split ONLY when EVERY one of these holds for the proposed boundary:
-
-- **(a) One-directional consumption.** Later subsystems read/extend what earlier ones materialize, never the reverse. The subsystems must form a dependency order.
-- **(b) Needs expressible as requirements.** Write what a later subsystem needs from an earlier one as requirements: what data must be provided, and how well accessing it must perform given the later subsystem's workload. This never requires knowing how the later subsystem will be implemented — do not assume it, and do not design it.
-- **(c) Independently buildable.** Each subsystem is fully buildable and testable given only the subsystems before it.
-
-There is NO cap on subsystem count, but every boundary must pass (a)–(c).
-
-## Coverage requirements
-
-Verify BOTH explicitly before writing the artifact:
-
-- Every operation enumerated in `IMPLICIT_SPEC.md` is assigned to EXACTLY ONE subsystem's spec. A cross-cutting operation (one that touches several subsystems' state) is owned by the LATEST subsystem it touches — that cycle can read and extend everything built before it; whatever it needs from earlier subsystems goes into their specs as induced requirements.
-- Every stated constraint/property in the spec is owned by at least one subsystem's spec. NOTHING may fall between subsystems.
-
-## Steps
-
-1. Read the spec, any interface definitions, and `IMPLICIT_SPEC.md` in full.
-2. List candidate boundaries. For each, check rules (a)–(c) with a concrete scenario; record the ones you reject and why in the reasoning log.
-3. For each surviving boundary, work out the induced requirements: for each later subsystem B that needs something from an earlier subsystem A, state — as a requirement on A, with concrete numbers — what A must support and how well. Justify each by B's WORKLOAD (rates, volumes, latency budgets), never by B's mechanism. Neither A's design nor B's design may appear.
-4. Run the coverage requirements above. If anything is unowned, either assign it or collapse the split.
-5. Write each subsystem's spec, then the artifact (see Output).
+1. **The burden stays with the data owner.** Every demand a later sub-problem places on an earlier one goes in the EARLIER spec, as a definite requirement: what must be readable, at what cost and balance, at the consumer's workload rates.
+2. **A requirement is never an alternative.** "Or" has no place in a requirement — an either/or lets the data owner pass its burden downstream. State one obligation.
+3. **Requirements come from workload numbers, never from an imagined design.** Do not assume a strategy the later sub-problem will use — if it needs a derived value, its plan phase can read the data. Never name a mechanism (PState, depot, partitioner, structure, strategy) of either sub-problem.
+4. **Complete coverage.** Every operation in `IMPLICIT_SPEC.md` is owned by exactly one sub-problem (a cross-cutting operation goes to the latest it touches). Every stated constraint lives in the spec of the sub-problem whose design determines it.
+5. **Self-sufficient specs.** Each spec carries: its operations with full contracts and edge cases; every requirement it must satisfy, including burdens induced by later sub-problems; all workload numbers copied in; and what earlier sub-problems provide, restated as the obligations their specs carry. No design anywhere — that is each cycle's plan phase.
 
 ## Output
 
-`<impl-root>/DECOMPOSITION.json` — a JSON array of subsystem objects, in dependency order:
+`<impl-root>/DECOMPOSITION.json` — a JSON array of `{"name": "kebab-case-slug", "spec": "..."}` in dependency order. A single-subsystem decomposition is one entry; its spec may defer to the full spec.
 
-```json
-[{"name": "kebab-case-slug",
-  "spec": "A complete problem statement for this subsystem's build cycle."},
- ...]
-```
+## Validation checklist
 
-Each `"spec"` is a **self-contained mini-spec** — the problem statement its build cycle works from. It MUST contain:
+Check every item before finishing; fix and re-check until all pass. Record failures and fixes in the reasoning log.
 
-- What to build, and the operations it owns (from `IMPLICIT_SPEC.md`).
-- Every requirement and property the subsystem must satisfy — including those induced by later subsystems, stated as properties of THIS subsystem's data and behavior.
-- The concrete workload numbers that apply (rates, size bounds, distributions, latency budgets), copied from the global spec. The building session must not have to re-derive workload facts.
-- NO design of any later subsystem's mechanism.
+- Each spec passes the self-sufficiency test: buildable from that spec plus this skill alone.
+- No requirement contains an alternative ("or") that shifts a burden between sub-problems.
+- No requirement is justified by how a later sub-problem might work.
+- No mechanism named anywhere.
+- Every operation owned exactly once; every constraint owned by the sub-problem whose design determines it; nothing unowned.
+- No trivial sub-problem that should be folded into its consumer.
+- If the result is ONE subsystem for a spec with several distinct workloads: the reasoning log shows attempted boundary requirements that failed these principles — not an assertion of impossibility.
 
-Self-sufficiency test before finishing: could a session reading ONLY this `"spec"` (plus this skill) build the subsystem correctly? If not, the spec is incomplete.
-
-A single-subsystem decomposition is one entry; its `"spec"` may defer to the full spec.
-
-No verdict line. This phase is done when the artifact exists and parses as JSON.
+This phase is done when the artifact exists, parses as JSON, and every check passes. No verdict line.
 
 ## Orchestration routing
 
-After this phase, the build routes on the decomposition:
-
-- **One subsystem** → a single build cycle for the whole module, identical to a build without decomposition (unsuffixed artifact names). If the decomposition is absent or names a single subsystem, the build proceeds as one cycle.
-- **n > 1 subsystems** → one full plan→implement→test cycle per subsystem, in the listed order. Each cycle builds against its entry's `"spec"` and uses slug-suffixed validation artifacts; module source and tests are shared and accumulate.
-
-## Do NOT
-
-- Do NOT split to make subsystems "smaller" or "cleaner" — split only when rules (a)–(c) all hold.
-- Do NOT put design in ANY spec — not this subsystem's, not an earlier one's induced requirements. Decomposition produces requirements; the plan phases produce designs, using costing machinery (alternatives, partitioning tables) that this phase does not perform. A design embedded here bypasses every quality gate the process has.
-- Do NOT write induced requirements that prescribe a later subsystem's mechanism. If you can't state the need as a property of the earlier subsystem's data, do not split.
-- Do NOT omit workload numbers from a `"spec"` — a spec whose builder must consult the global spec for rates and bounds is incomplete.
-- Do NOT leave any operation or stated constraint unassigned.
-- Do NOT design PStates, depots, or topologies in this phase — that is the plan phase's job, once per subsystem.
+- **One subsystem** (or missing/malformed artifact) → a single build cycle for the whole module, identical to a build without decomposition (unsuffixed artifact names).
+- **n > 1** → one full build cycle per sub-problem, in listed order; each cycle builds against its entry's `"spec"` with slug-suffixed validation artifacts; module source and tests are shared and accumulate.
