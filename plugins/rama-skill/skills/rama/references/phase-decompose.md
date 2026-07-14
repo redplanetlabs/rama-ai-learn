@@ -8,7 +8,7 @@ Inputs: the user-facing spec, any interface/contract files, `<impl-root>/IMPLICI
 
 ## Principles
 
-**1. A decomposition is a sequence of complete specs.** Each sub-problem's spec is a standalone problem statement: the operations it owns (each operation of the whole belongs to exactly one part; a cross-cutting operation goes to the latest part it touches), their full contracts and edge cases, every requirement it must satisfy, and the workload numbers — all copied in. A build cycle reads only its spec; the parts together must satisfy the whole spec.
+**1. A decomposition is a sequence of complete specs.** Each sub-problem's spec is a standalone problem statement: the operations it owns (each operation of the whole belongs to exactly one part; a cross-cutting operation goes to the latest part it touches), their full contracts and edge cases, every requirement it must satisfy, and the workload numbers — all copied in. A build cycle reads only its spec; the parts together must satisfy the whole spec. Decomposition must not LOSE information: every detail of the whole spec — numbers, tables, example distributions, edge cases, exact bounds — appears verbatim in every spec it applies to. Summarizing is losing: a description of a table is not the table.
 
 **2. Dependence is absorbed by requirements.** Sub-problems are never independent — later parts build on earlier parts' state. The specs absorb that dependence: everything a later part demands of earlier state is written into the EARLIER spec as a definite requirement — one obligation, never alternatives — stating what the data must support and how well, under the consuming workload's numbers. Every constraint of the whole spec is owned by the part whose work determines it. This is what makes a dependent part independently buildable.
 
@@ -24,6 +24,7 @@ Verify each item before finishing; record failures and fixes in the reasoning lo
 
 - Every hard part of the problem has its own sub-problem.
 - Each spec is buildable from itself plus this skill alone.
+- No information lost: walk the whole spec detail by detail — every number, table, example distribution, edge case, and stated bound appears verbatim in every spec it applies to. Nothing summarized away.
 - Every operation owned exactly once; every constraint owned by the part whose work determines it.
 - Every cross-part demand appears in the earlier spec as one definite requirement — no alternatives, no "or".
 - No mechanism named or assumed anywhere; no requirement justified by another part's imagined strategy.
