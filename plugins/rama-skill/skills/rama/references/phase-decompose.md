@@ -12,7 +12,7 @@ Inputs: the user-facing spec, any interface/contract files, `<impl-root>/IMPLICI
 
 **2. Dependence is absorbed by requirements.** Sub-problems are never independent — later parts build on earlier parts' state. The specs absorb that dependence: everything a later part demands of earlier state is written into the EARLIER spec as a definite requirement — one obligation, never alternatives — stating what the data must support and how well, under the consuming workload's numbers. Every constraint of the whole spec is owned by the part whose work determines it. This is what makes a dependent part independently buildable.
 
-**3. Specs demand; they never design.** No spec names or assumes a mechanism — its own or another part's. A requirement is justified by workload, never by a strategy some part might use. Symmetrically, never judge whether a requirement can be satisfied — that is the build cycles' job, and their gates enforce the spec. Reject a boundary only when a demand cannot be written as a requirement, never because the requirement looks hard.
+**3. Specs demand; they never design.** No spec names or assumes a mechanism — its own or another part's. Mechanisms include: PStates, depots, tick depots, topology types (stream/microbatch), dataflow, batch blocks, query topologies, aggregators, partitioning schemes, mirrors, paths, TaskGlobals and in-memory-vs-durable placement, caching/denormalization, materializations/indexes, yielding strategies, ack levels/retry modes, serialization. A requirement is justified by workload, never by a strategy some part might use. Symmetrically, never judge whether a requirement can be satisfied — that is the build cycles' job, and their gates enforce the spec. Reject a boundary only when a demand cannot be written as a requirement, never because the requirement looks hard.
 
 ## Output
 
@@ -27,7 +27,7 @@ Verify each item before finishing; record failures and fixes in the reasoning lo
 - No information lost: walk the whole spec detail by detail — every number, table, example distribution, edge case, and stated bound appears verbatim in every spec it applies to. Nothing summarized away.
 - Every operation owned exactly once; every constraint owned by the part whose work determines it.
 - Every cross-part demand appears in the earlier spec as one definite requirement — no alternatives, no "or".
-- No mechanism named or assumed anywhere; no requirement justified by another part's imagined strategy.
+- No mechanism named or assumed anywhere — none of the mechanisms listed in principle 3; no requirement justified by another part's imagined strategy.
 - No boundary rejected for looking hard to satisfy; no trivial part left unfolded.
 
 This phase is done when the artifact exists, parses as JSON, and every check passes. No verdict line.
