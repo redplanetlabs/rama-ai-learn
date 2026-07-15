@@ -250,8 +250,8 @@ def cmd_decomposition(lines, args):
         print("=" * 72)
         print(f"SUBSYSTEM: {name}")
         print("=" * 72)
-        if isinstance(entry, dict) and entry.get('spec'):
-            print(entry['spec'])
+        if isinstance(entry, dict) and entry.get('scope'):
+            print(entry['scope'])
         print()
 
 def _final_file_content(lines, name, require=None):

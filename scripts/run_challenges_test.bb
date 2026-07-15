@@ -701,18 +701,18 @@
         (babashka.fs/delete-tree tmp-root)))))
 
 (def ^:private single-subsystem-decomposition
-  [{:name "whole" :spec "Build the whole module per the full spec."}])
+  [{:name "whole" :scope "Build the whole module per the full spec."}])
 
 (def ^:private two-subsystem-decomposition
-  [{:name "alpha" :spec "Alpha sub-spec."}
-   {:name "beta" :spec "Beta sub-spec."}])
+  [{:name "alpha" :scope "Alpha scope."}
+   {:name "beta" :scope "Beta scope."}])
 
 (deftest read-decomposition-test
   ;; Tests parsing of DECOMPOSITION.json: a JSON array of subsystem objects
-  ;; ({"name": ..., "spec": ...}) in dependency order; the runner consumes
-  ;; only the "name" order. Plain name strings are tolerated; anything malformed
-  ;; returns nil (single-subsystem fallback) with a stderr warning, never
-  ;; a throw.
+  ;; ({"name": ..., "scope": ...}) in dependency order; the runner consumes
+  ;; only the "name" order. Every entry must be an object with non-empty
+  ;; "name" and "scope" strings; anything malformed returns nil
+  ;; (single-subsystem fallback) with a stderr warning, never a throw.
   (testing "read-decomposition"
     (let [tmp-root (str (babashka.fs/create-temp-dir))
           challenge "rd-ch"
@@ -725,24 +725,36 @@
                   (binding [*err* (java.io.StringWriter.)] ; silence warnings
                     (read-decomposition tmp-root challenge)))]
       (try
-        (testing "array of objects (primary shape) yields the name values"
-          (write! (json/generate-string [{:name "alpha" :spec "base state"}
-                                         {:name "beta" :spec "derived views"}]))
+        (testing "array of name+scope objects (required shape) yields the name values"
+          (write! (json/generate-string [{:name "alpha" :scope "base state"}
+                                         {:name "beta" :scope "derived views"}]))
           (is (= ["alpha" "beta"] (read!))))
-        (testing "array of name strings is tolerated"
+        (testing "plain name strings are rejected"
           (write! "[\"graph\", \"delivery\"]")
-          (is (= ["graph" "delivery"] (read!))))
+          (is (nil? (read!))))
+        (testing "legacy \"spec\" key is rejected"
+          (write! (json/generate-string [{:name "graph" :spec "base state"}]))
+          (is (nil? (read!))))
+        (testing "missing scope falls back to nil"
+          (write! (json/generate-string [{:name "graph" :scope "s"} {:name "delivery"}]))
+          (is (nil? (read!))))
+        (testing "blank scope falls back to nil"
+          (write! (json/generate-string [{:name "graph" :scope "  "}]))
+          (is (nil? (read!))))
         (testing "names are trimmed"
-          (write! "[\" graph \", \"delivery\"]")
+          (write! (json/generate-string [{:name " graph " :scope "s1"}
+                                         {:name "delivery" :scope "s2"}]))
           (is (= ["graph" "delivery"] (read!))))
         (testing "duplicate names fall back to nil"
-          (write! "[\"graph\", \"graph\"]")
+          (write! (json/generate-string [{:name "graph" :scope "s1"}
+                                         {:name "graph" :scope "s2"}]))
           (is (nil? (read!))))
         (testing "blank name falls back to nil"
-          (write! "[\"graph\", \"  \"]")
+          (write! (json/generate-string [{:name "graph" :scope "s1"}
+                                         {:name "  " :scope "s2"}]))
           (is (nil? (read!))))
-        (testing "non-string, non-object entry falls back to nil"
-          (write! "[\"graph\", 42]")
+        (testing "non-object entry falls back to nil"
+          (write! (str "[" (json/generate-string {:name "graph" :scope "s1"}) ", 42]"))
           (is (nil? (read!))))
         (testing "empty array falls back to nil"
           (write! "[]")

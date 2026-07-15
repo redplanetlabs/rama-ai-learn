@@ -97,7 +97,7 @@ The implementation root is `implementations/<challenge_name>/` — substitute th
 
 The skill root is `plugins/rama-skill/skills/rama/` — substitute this for `<skill-root>` in any cp command in the per-phase doc.
 
-**Decompose stage only:** `DECOMPOSITION.json` is read by the orchestrating runner to drive the per-subsystem cycles (it takes the `"name"` order; phase agents read the `"spec"` entries). Verify it parses as JSON before finishing — if it is missing or malformed the runner silently falls back to a single-subsystem build and your decomposition is discarded.
+**Decompose stage only:** `DECOMPOSITION.json` is read by the orchestrating runner to drive the per-subsystem cycles (it takes the `"name"` order; phase agents read the `"scope"` entries). Verify it parses as JSON before finishing — if it is missing or malformed the runner silently falls back to a single-subsystem build and your decomposition is discarded.
 
 ## Subsystem (third argument, phases 1..7 only)
 
@@ -105,17 +105,24 @@ The decompose stage splits some modules into subsystems. When the runner
 passes a third argument, you are building ONE subsystem of the module:
 
 1. Read `implementations/<challenge_name>/DECOMPOSITION.json` and locate your
-   subsystem's entry. That entry's `"spec"` IS your spec for this build cycle —
-   what to build, the operations you own, and every requirement you must
-   satisfy (including what later subsystems need from your state). Implement
-   and test what it assigns you, and only that.
+   subsystem's entry. That entry's `"scope"` is WHAT you build this cycle: the
+   operations you own and the state (PStates, depots, query topologies) you
+   must figure out — including state whose only consumers are later
+   subsystems. The scope is NOT your spec. Your requirements are the FULL
+   spec (README + protocol files, which you have already read): every
+   requirement there that binds anything in your scope applies at full
+   strength — including global properties (performance, balance,
+   fault-tolerance) as they bear on reads and writes of YOUR state, whether
+   those reads come from your own operations or from later subsystems'
+   workloads as the spec describes them.
 2. **Earlier subsystems are already implemented and tested.** Before designing,
    read their `PLAN-<sub>.md` artifacts and the current module source. EXTEND
    the module — do NOT redesign, rewrite, or degrade what earlier subsystems
    built. Their tests must keep passing.
-3. **Later subsystems will build on your state.** Satisfy every induced
-   requirement listed for your subsystem, but do NOT design or implement the
-   later subsystems' mechanisms.
+3. **Later subsystems will build on your state.** Deliver the state your scope
+   assigns you, satisfying the full-spec requirements that bind it — but do
+   NOT design or implement the later subsystems' own mechanisms, and do NOT
+   build anything outside your scope.
 4. Artifact names gain your subsystem slug as a suffix:
    `PLAN-<subsystem>.md`, `PLAN_VALIDATION-<subsystem>.md`,
    `IMPLEMENTATION_VALIDATION-<subsystem>.md`, `TEST_VALIDATION-<subsystem>.md`.

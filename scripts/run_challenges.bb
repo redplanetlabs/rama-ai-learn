@@ -1104,13 +1104,13 @@
 
 (defn read-decomposition
   "Read implementations/<challenge>/DECOMPOSITION.json written by the
-  decompose stage. The expected shape is a JSON array of subsystem objects in
-  dependency order, e.g. [{\"name\": \"graph\", \"spec\": \"...\"}, ...]; the
-  runner consumes only the \"name\" order (phase agents read the \"spec\"
-  entries). Plain name strings are also tolerated. Returns a non-empty vector
-  of distinct, trimmed, non-empty name strings, or nil when the file is
-  missing, unparseable, empty, or malformed — the caller then treats the
-  module as a single subsystem. Never throws."
+  decompose stage. The required shape is a JSON array of subsystem objects in
+  dependency order, each with a non-empty \"name\" and \"scope\":
+  [{\"name\": \"graph\", \"scope\": \"...\"}, ...]; the runner consumes only
+  the \"name\" order (phase agents read the \"scope\" entries). Returns a
+  non-empty vector of distinct, trimmed, non-empty name strings, or nil when
+  the file is missing, unparseable, empty, or malformed — the caller then
+  treats the module as a single subsystem. Never throws."
   [project-root challenge-name]
   (let [path (fs/path project-root "implementations" challenge-name "DECOMPOSITION.json")
         warn! (fn [msg]
@@ -1118,13 +1118,13 @@
                   (println (format "WARN: %s — treating %s as a single subsystem."
                                    msg challenge-name))))
         entry-name (fn [entry]
-                     (let [n (cond
-                               (string? entry) entry
-                               (map? entry) (:name entry)
-                               :else nil)]
-                       (when (string? n)
-                         (let [trimmed (str/trim n)]
-                           (when (seq trimmed) trimmed)))))]
+                     (when (and (map? entry)
+                                (string? (:scope entry))
+                                (seq (str/trim (:scope entry))))
+                       (let [n (:name entry)]
+                         (when (string? n)
+                           (let [trimmed (str/trim n)]
+                             (when (seq trimmed) trimmed))))))]
     (if-not (fs/exists? path)
       (do (warn! (str "DECOMPOSITION.json missing at " path)) nil)
       ;; cheshire parses top-level JSON arrays lazily — force realization
@@ -1146,7 +1146,7 @@
           (let [names (mapv entry-name parsed)]
             (cond
               (some nil? names)
-              (do (warn! "DECOMPOSITION.json entries must be non-empty subsystem name strings") nil)
+              (do (warn! "DECOMPOSITION.json entries must be objects with non-empty \"name\" and \"scope\" strings") nil)
 
               (not (apply distinct? names))
               (do (warn! "DECOMPOSITION.json subsystem names must be distinct") nil)
