@@ -35,6 +35,7 @@ Partitioning efficiency — check the `## Partitioning efficiency` table in `PLA
 - Microbatch unless justified? <yes/no>
 - For each write operation that must be visible in single-digit milliseconds: is it handled by a stream topology? Microbatch has at least 300ms latency and cannot meet single-digit millisecond visibility requirements. <list each low-latency write and its topology — if any uses microbatch, FAIL>
 - For each stream topology: list every processing concern it handles. For each concern, does it actually require stream semantics (millisecond-level update latency or ack coordination with the appender)? If any concern does not require stream, FAIL — that concern belongs in a separate microbatch topology. Multiple topologies can consume the same depot independently or topologies can communicate with an internal depot.
+- Was any topology choice made, or any alternative rejected, on test-synchronization or observability grounds? <if yes, FAIL — any design can be synchronized by materializing progress state and polling it; re-evaluate the alternative on the spec's requirements alone>
 
 ## Production readiness
 - Does the plan work correctly with multiple concurrent clients? <yes/no — if no, FAIL>

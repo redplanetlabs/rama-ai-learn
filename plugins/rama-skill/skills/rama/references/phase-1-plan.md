@@ -101,6 +101,8 @@ Topology types:
 
 **Read BOTH `references/microbatch.md` AND `references/stream.md` before choosing topology types.** Do NOT skip either reference — the topology choice must be informed by the full capabilities of both, not just latency.
 
+Do NOT choose, reject, or degrade a design on test-synchronization grounds. Synchronization never requires changing a design: if no built-in test waiter fits, materialize progress state and poll it (see `references/testing.md` "Synchronizing Any Design"). Testability never justifies missing a spec requirement.
+
 If the design requires any of these, read the corresponding reference:
 - Unique ID generation either client-side or within topologies → read `references/unique-ids.md`
 - Time-based/scheduled processing (expirations, delayed tasks, periodic cleanup) → read `references/scheduling.md`

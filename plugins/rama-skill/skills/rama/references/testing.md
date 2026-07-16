@@ -152,6 +152,18 @@ complete before returning (no-op if already paused). The next
 microbatch contains all records appended while paused (up to 1000 per
 partition). `resume-microbatch-topology!` is a no-op if already active.
 
+## Synchronizing Any Design
+
+`:ack` and `wait-for-microbatch-processed-count` are not the only
+synchronization mechanisms. Any condition observable through a PState
+or query topology is a synchronization point: materialize progress
+state as part of the design (e.g. counters of work enqueued and work
+completed) and poll until the condition holds — processing is done
+when the counters are equal. Every design is synchronizable this way.
+Do NOT reject a design as "untestable" because no built-in waiter
+matches its topology pattern — design the progress state that makes
+completion observable instead.
+
 ## Testing Stream Topologies with Mirror Depots
 
 Depot appends with `AckLevel/ACK` do **not** wait for stream
