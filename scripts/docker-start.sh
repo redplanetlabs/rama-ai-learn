@@ -18,12 +18,27 @@ if [ -z "${CLAUDE_CODE_OAUTH_TOKEN:-}" ]; then
 fi
 
 echo "Starting container '$CONTAINER'..."
+# No host bind mounts: Docker file sharing is disabled, so host paths
+# cannot be mounted. Maven/gitlibs caches live in named volumes that
+# persist across containers; data moves in/out only via docker cp.
 docker run -d \
   --name "$CONTAINER" \
   -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
-  -v "$HOME/.m2:/root/.m2" \
+  -v rama-m2:/root/.m2 \
   -v rama-gitlibs:/root/.gitlibs \
   rama-challenges sleep infinity
+
+# Seed the Maven repository volume from the host on first use (docker cp
+# streams via the API and needs no file sharing). One-time: the rama-m2
+# volume persists, so later starts skip this. A sentinel file marks the
+# seed — mere existence of /root/.m2/repository doesn't, because the
+# image's own build-time downloads pre-populate the volume.
+if [ -d "$HOME/.m2/repository" ] && \
+   ! docker exec "$CONTAINER" test -f /root/.m2/.host-seeded; then
+  echo "Seeding Maven repository into rama-m2 volume (one-time, may take a few minutes)..."
+  docker cp "$HOME/.m2/repository" "$CONTAINER:/root/.m2/"
+  docker exec "$CONTAINER" touch /root/.m2/.host-seeded
+fi
 
 # Copy minimal Claude config (no conversation history, memory, or session state)
 echo "Copying Claude config into container..."
