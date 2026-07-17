@@ -28,18 +28,6 @@ docker run -d \
   -v rama-gitlibs:/root/.gitlibs \
   rama-challenges sleep infinity
 
-# Seed the Maven repository volume from the host on first use (docker cp
-# streams via the API and needs no file sharing). One-time: the rama-m2
-# volume persists, so later starts skip this. A sentinel file marks the
-# seed — mere existence of /root/.m2/repository doesn't, because the
-# image's own build-time downloads pre-populate the volume.
-if [ -d "$HOME/.m2/repository" ] && \
-   ! docker exec "$CONTAINER" test -f /root/.m2/.host-seeded; then
-  echo "Seeding Maven repository into rama-m2 volume (one-time, may take a few minutes)..."
-  docker cp "$HOME/.m2/repository" "$CONTAINER:/root/.m2/"
-  docker exec "$CONTAINER" touch /root/.m2/.host-seeded
-fi
-
 # Copy minimal Claude config (no conversation history, memory, or session state)
 echo "Copying Claude config into container..."
 docker exec "$CONTAINER" mkdir -p /root/.claude
