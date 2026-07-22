@@ -42,13 +42,26 @@ Emit one of `PHASE_VALIDATION:pass`, `PHASE_VALIDATION:minor-fail`, or `PHASE_VA
 
 When unsure between minor and major, choose **major-fail**.
 
+## Difficulty classification
+
+When (and only when) the verdict is **pass** or **minor-fail**, also classify how much scrutiny the *rest* of the build — implementing and testing this now-vetted plan — needs. Emit it on the line BEFORE the verdict:
+
+`PHASE_DIFFICULTY:easy`, `PHASE_DIFFICULTY:medium`, or `PHASE_DIFFICULTY:hard`.
+
+Judge the concrete plan you just validated, not the problem in the abstract:
+
+- **easy** — implementing this plan is mechanical; a fresh-eyes implementation and test review would only re-confirm it, not catch a design mistake.
+- **medium** — the plan is settled, but implementing it correctly is involved enough that an independent implementation/test review could catch a real bug.
+- **hard** — the plan's correctness hinges on a non-obvious design decision where a subtle implementation mistake is costly and every phase warrants the strongest scrutiny.
+
+When genuinely unsure, classify **up** — the cost of over-classifying is speed, of under-classifying is a missed defect.
+
 ## Orchestration routing
 
 This is a three-way verdict phase. The orchestrator uses the verdict to decide what happens next:
 
-- **pass** → proceed to Phase 3 (implement).
-- **minor-fail** → the validator fixes `PLAN.md` directly and proceeds to Phase 3. No return to Phase 1, no re-validation.
-- **major-fail** → return to Phase 1 (plan) for revision. The plan author reads `PLAN_VALIDATION.md` and addresses every FAIL item. Up to 3 retry iterations; if the cap is hit, the orchestrator proceeds to Phase 3 with the best plan so far.
+- **pass** / **minor-fail** → the difficulty classification routes the rest of the build: **easy** collapses implementation and testing into a single `build` session; **medium** and **hard** run the gated phases 3–7 (differing only in which model executes them). On minor-fail the validator first fixes `PLAN.md` directly.
+- **major-fail** → return to Phase 1 (plan) for revision. The plan author reads `PLAN_VALIDATION.md` and addresses every FAIL item. Up to 3 retry iterations; if the cap is hit, the orchestrator proceeds with the best plan so far.
 
 ## Do NOT
 

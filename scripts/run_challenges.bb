@@ -23,10 +23,10 @@
    :agent      {:desc "Agent to use: claude or codex (default: claude)"
                 :alias :a
                 :default "claude"}
-   :normal-model  {:desc "Model for normal-difficulty subsystem cycles (required)"}
-   :normal-effort {:desc "Reasoning effort for normal-difficulty cycles (required)"}
-   :hard-model    {:desc "Model for hard-difficulty cycles + framing stages (required)"}
-   :hard-effort   {:desc "Reasoning effort for hard-difficulty cycles + framing (required)"}
+   :fast-model  {:desc "Fast model: phase 0, easy/medium subproblem phases (required)"}
+   :fast-effort {:desc "Reasoning effort for the fast model (required)"}
+   :slow-model  {:desc "Slow model: planning, plan-validation, decompose, review, hard subproblems (required)"}
+   :slow-effort {:desc "Reasoning effort for the slow model (required)"}
    :verbose    {:desc "Stream agent output to console in real time"
                 :alias :v
                 :coerce :boolean}
@@ -120,16 +120,17 @@
   (println "  -b, --batch N           Batch number to run (1-5)")
   (println "  -d, --difficulty TYPE   Difficulty filter: standard or hard")
   (println "  -a, --agent NAME        Agent to use: claude or codex (default: claude)")
-  (println "      --normal-model M    Model for normal-difficulty cycles (required)")
-  (println "      --normal-effort E   Reasoning effort for normal-difficulty cycles (required)")
-  (println "      --hard-model M      Model for hard-difficulty cycles + framing stages (required)")
-  (println "      --hard-effort E     Reasoning effort for hard-difficulty cycles + framing (required)")
+  (println "      --fast-model M      Fast model: phase 0, easy/medium subproblem phases (required)")
+  (println "      --fast-effort E     Reasoning effort for the fast model (required)")
+  (println "      --slow-model M      Slow model: planning, validation, decompose, review, hard (required)")
+  (println "      --slow-effort E     Reasoning effort for the slow model (required)")
   (println "  -v, --verbose           Stream agent output to console in real time")
   (println "  -h, --help              Show this help")
   (println)
-  (println "The decompose stage classifies each subsystem normal|hard; the runner")
-  (println "runs each on the matching tier. Framing stages (phase 0, decompose,")
-  (println "full-spec-review) run on the hard tier.")
+  (println "Planning (phase 1) and plan-validation (phase 2) always run on the slow")
+  (println "model. Phase 2 classifies each subproblem easy|medium|hard: easy runs the")
+  (println "rest in one fast session; medium runs the gated phases on the fast model;")
+  (println "hard runs the gated phases on the slow model.")
   (println)
   (println "Note: Batch 5 (cluster operations) requires a running local Rama cluster.")
   (println "      Set RAMA_CONDUCTOR_HOST/RAMA_CONDUCTOR_UI_PORT to override defaults.")
@@ -307,6 +308,15 @@
   verdict matters, so we take the last occurrence."
   [output]
   (when-let [matches (seq (re-seq #"PHASE_VALIDATION:(minor-fail|major-fail|pass|fail)" output))]
+    (keyword (second (last matches)))))
+
+(defn parse-phase-difficulty
+  "Extract the PHASE_DIFFICULTY classification from phase-2 output. Returns
+  :easy, :medium, :hard, or nil if absent. As with the verdict, take the LAST
+  occurrence (earlier ones appear in echoed doc instructions). A missing/invalid
+  classification is treated by the caller as :medium (gated, fast model)."
+  [output]
+  (when-let [matches (seq (re-seq #"PHASE_DIFFICULTY:(easy|medium|hard)" output))]
     (keyword (second (last matches)))))
 
 (def score-keys [:alignment :test-alignment])
@@ -544,23 +554,23 @@
 
 (def ^:dynamic *pretty* false)
 
-;; Per-difficulty model/effort tiers. The decompose stage classifies each
-;; subsystem as "normal" or "hard"; the runner executes that subsystem's
-;; phases with the matching tier. Framing stages (phase 0, decompose,
-;; full-spec-review) use the hard tier — they are the highest-leverage
-;; reasoning stages. Each defaults to nil (= inherit the agent's default);
-;; -main resolves them from CLI opts, falling back to --model/--reasoning.
-(def ^:dynamic *normal-model* nil)
-(def ^:dynamic *normal-reasoning* nil)
-(def ^:dynamic *hard-model* nil)
-(def ^:dynamic *hard-reasoning* nil)
+;; Two model tiers: fast and slow. Phase 2 classifies each subproblem
+;; easy|medium|hard; the runner maps that to a tier (easy/medium → fast,
+;; hard → slow) and, for easy, collapses the post-plan phases into one
+;; session. Planning (1), plan-validation (2), decompose, and full-spec-review
+;; always run on the slow tier; phase 0 and the fast subproblem phases run on
+;; the fast tier. -main resolves both tiers from required CLI opts.
+(def ^:dynamic *fast-model* nil)
+(def ^:dynamic *fast-reasoning* nil)
+(def ^:dynamic *slow-model* nil)
+(def ^:dynamic *slow-reasoning* nil)
 
 (defn tier-config
-  "Return [model reasoning] for a difficulty keyword (:normal | :hard)."
-  [difficulty]
-  (if (= :hard difficulty)
-    [*hard-model* *hard-reasoning*]
-    [*normal-model* *normal-reasoning*]))
+  "Return [model reasoning] for a tier keyword (:fast | :slow)."
+  [tier]
+  (if (= :slow tier)
+    [*slow-model* *slow-reasoning*]
+    [*fast-model* *fast-reasoning*]))
 
 ;;; Pretty-printing stream-json output
 
@@ -1078,6 +1088,7 @@
           (invoke-command! cmd project-root))
         combined (str out "\n" err)
         verdict (parse-phase-verdict combined)
+        difficulty (parse-phase-difficulty combined)
         transcript-path (save-transcript! project-root agent-name model reasoning
                                           challenge-name out phase-id attempt
                                           run-start-time subsystem)
@@ -1097,6 +1108,7 @@
      :timed-out? (boolean timed-out?)
      :duration-s duration-s
      :verdict verdict
+     :difficulty difficulty
      :transcript-path transcript-path
      :token-usage token-usage
      :cost cost
@@ -1129,16 +1141,13 @@
 (defn read-decomposition
   "Read implementations/<challenge>/DECOMPOSITION.json written by the
   decompose stage. The required shape is a JSON array of subsystem objects in
-  dependency order, each with a non-empty \"name\", a non-empty \"scope\", and
-  a \"difficulty\" of \"normal\" or \"hard\":
-  [{\"name\": \"graph\", \"scope\": \"...\", \"difficulty\": \"hard\"}, ...].
-  The runner consumes the \"name\" order and per-entry \"difficulty\" (to pick
-  the model tier); phase agents read the \"scope\" entries. Returns a non-empty
-  vector of {:name <trimmed string> :difficulty :normal|:hard} in file order,
-  or nil when the file is missing, unparseable, empty, or malformed — the
-  caller then treats the module as a single subsystem. A missing/invalid
-  \"difficulty\" on an otherwise-valid entry defaults to :normal (warned), not
-  fatal. Never throws."
+  dependency order, each with a non-empty \"name\" and \"scope\":
+  [{\"name\": \"graph\", \"scope\": \"...\"}, ...]; the runner consumes the
+  \"name\" order (phase agents read the \"scope\" entries; per-subproblem
+  difficulty is decided later by phase 2, not here). Returns a non-empty vector
+  of {:name <trimmed string>} in file order, or nil when the file is missing,
+  unparseable, empty, or malformed — the caller then treats the module as a
+  single subsystem. Never throws."
   [project-root challenge-name]
   (let [path (fs/path project-root "implementations" challenge-name "DECOMPOSITION.json")
         warn! (fn [msg]
@@ -1151,17 +1160,8 @@
                                 (seq (str/trim (:scope entry))))
                        (let [n (:name entry)]
                          (when (string? n)
-                           (let [trimmed (str/trim n)
-                                 diff (some-> (:difficulty entry) str str/trim str/lower-case)]
-                             (when (seq trimmed)
-                               {:name trimmed
-                                :difficulty (cond
-                                              (= diff "hard") :hard
-                                              (= diff "normal") :normal
-                                              :else (do (binding [*out* *err*]
-                                                          (println (format "WARN: subsystem %s has missing/invalid difficulty %s — defaulting to normal."
-                                                                           trimmed (pr-str (:difficulty entry)))))
-                                                        :normal))}))))))]
+                           (let [trimmed (str/trim n)]
+                             (when (seq trimmed) {:name trimmed}))))))]
     (if-not (fs/exists? path)
       (do (warn! (str "DECOMPOSITION.json missing at " path)) nil)
       ;; cheshire parses top-level JSON arrays lazily — force realization
@@ -1217,30 +1217,42 @@
   An overall wall-clock budget (*overall-timeout-s*) caps the entire run.
   Checked at every loop iteration; per-call subprocess timeouts are clamped
   to the remaining budget."
-  [agent-fns challenge-name subsystem project-root agent-name model reasoning
+  [agent-fns challenge-name subsystem project-root agent-name fast-tier slow-tier
    run-start-time run-start-millis]
-  (loop [phase-id 1
-         attempts {1 1, 2 1, 3 1, 4 1, 5 1, 6 1, 7 1}
-         skip-flags {4 false}
-         validation-fail-counts {2 0, 4 0, 6 0}
-         results []]
+  ;; Phases 1 and 2 (plan + plan-validation) always run on the slow tier. Phase
+  ;; 2 classifies the subproblem easy|medium|hard (PHASE_DIFFICULTY). The
+  ;; post-validation work then runs as: a single collapsed :easy-build session on the
+  ;; fast tier (easy), the gated 3→7 loop on the fast tier (medium), or the
+  ;; gated 3→7 loop on the slow tier (hard).
+  (let [phase-tier (fn [phase-id difficulty]
+                     (cond
+                       (#{1 2} phase-id) slow-tier
+                       (= :hard difficulty) slow-tier
+                       :else fast-tier))]
+   (loop [phase-id 1
+          attempts {1 1, 2 1, 3 1, 4 1, 5 1, 6 1, 7 1, :easy-build 1}
+          skip-flags {4 false}
+          validation-fail-counts {2 0, 4 0, 6 0}
+          difficulty nil
+          results []]
     (cond
       ;; Overall budget exhausted — abort.
       (<= (time-remaining-s run-start-millis) 0)
       {:status :timeout
        :phase-results results
-       :failure-reason (format "Overall challenge time budget (%ds) exceeded before phase %d."
-                               *overall-timeout-s* phase-id)
+       :failure-reason (format "Overall challenge time budget (%ds) exceeded before phase %s."
+                               *overall-timeout-s* (phase-id-str phase-id))
        :transcript-path (:transcript-path (last results))}
 
       ;; One-shot skip for phase 4 (after a minor-fail on the prior round).
       (and (= phase-id 4) (get skip-flags 4))
-      (recur 5 attempts (assoc skip-flags 4 false) validation-fail-counts results)
+      (recur 5 attempts (assoc skip-flags 4 false) validation-fail-counts difficulty results)
 
       :else
       (let [attempt   (get attempts phase-id 1)
+            [pm pr]   (phase-tier phase-id difficulty)
             r         (run-phase! agent-fns challenge-name phase-id attempt subsystem
-                                  project-root agent-name model reasoning
+                                  project-root agent-name pm pr
                                   run-start-time run-start-millis)
             attempts' (assoc attempts phase-id (inc attempt))
             results'  (conj results r)]
@@ -1248,13 +1260,13 @@
           (:timed-out? r)
           {:status :timeout
            :phase-results results'
-           :failure-reason (format "Phase %d (attempt %d) timed out." phase-id attempt)
+           :failure-reason (format "Phase %s (attempt %d) timed out." (phase-id-str phase-id) attempt)
            :transcript-path (:transcript-path r)}
 
           (not= 0 (:exit r))
           {:status :fail
            :phase-results results'
-           :failure-reason (format "Phase %d (attempt %d) exited %d." phase-id attempt (:exit r))
+           :failure-reason (format "Phase %s (attempt %d) exited %d." (phase-id-str phase-id) attempt (:exit r))
            :transcript-path (:transcript-path r)}
 
           ;; Phase 2: three-way verdict.
@@ -1264,16 +1276,26 @@
           (= phase-id 2)
           (cond
             (or (= :pass (:verdict r)) (= :minor-fail (:verdict r)))
-            (recur 3 attempts' skip-flags
-                   (assoc validation-fail-counts 2 0)
-                   results')
+            ;; Read phase 2's easy|medium|hard classification (default :medium
+            ;; when absent/invalid). easy → one collapsed :easy-build session on the
+            ;; fast tier; medium/hard → the gated 3→7 loop (fast/slow tier).
+            (let [diff (or (:difficulty r) :medium)
+                  next-phase (if (= :easy diff) :easy-build 3)]
+              (when *verbose*
+                (println (format "  Phase 2 classified this subsystem: %s%s"
+                                 (name diff)
+                                 (if (= :easy diff) " → collapsed build session" ""))))
+              (recur next-phase attempts' skip-flags
+                     (assoc validation-fail-counts 2 0)
+                     diff
+                     results'))
 
             (= :major-fail (:verdict r))
             (let [prior-fails (get validation-fail-counts 2 0)
                   vfc' (assoc validation-fail-counts 2 (inc prior-fails))]
               (if (< prior-fails validation-retry-cap)
                 (do (save-attempt! project-root challenge-name)
-                    (recur 1 attempts' skip-flags vfc' results'))
+                    (recur 1 attempts' skip-flags vfc' nil results'))
                 {:status :fail
                  :phase-results results'
                  :failure-reason (format "Phase 2 failed validation %d times consecutively."
@@ -1284,6 +1306,28 @@
             {:status :fail
              :phase-results results'
              :failure-reason "Phase 2 did not emit PHASE_VALIDATION verdict."
+             :transcript-path (:transcript-path r)})
+
+          ;; :easy-build (collapsed easy path): implement + test + iterate to green in
+          ;; one session. Binary verdict, terminal like phase 7.
+          (= phase-id :easy-build)
+          (cond
+            (= :pass (:verdict r))
+            {:status :pass
+             :phase-results results'
+             :transcript-path (:transcript-path r)}
+
+            (= :fail (:verdict r))
+            {:status :fail
+             :phase-results results'
+             :failure-reason "Easy-build (collapsed path) emitted FAIL — agent could not get tests passing."
+             :transcript-path (:transcript-path r)}
+
+            :else
+            {:status :fail
+             :phase-results results'
+             :failure-reason (format "Easy-build did not emit a valid PHASE_VALIDATION verdict (got %s)."
+                                     (:verdict r))
              :transcript-path (:transcript-path r)})
 
           ;; Phases 4 and 6: three-way verdict (pass/minor-fail/major-fail).
@@ -1303,6 +1347,7 @@
             (= :pass (:verdict r))
             (recur (inc phase-id) attempts' skip-flags
                    (assoc validation-fail-counts phase-id 0)
+                   difficulty
                    results')
 
             (or (= :minor-fail (:verdict r)) (= :major-fail (:verdict r)))
@@ -1317,7 +1362,7 @@
                           skip-flags)]
               (if (< prior-fails validation-retry-cap)
                 (do (save-attempt! project-root challenge-name)
-                    (recur next-phase attempts' skip' vfc' results'))
+                    (recur next-phase attempts' skip' vfc' difficulty results'))
                 {:status :fail
                  :phase-results results'
                  :failure-reason (format "Phase %d failed validation %d times consecutively."
@@ -1357,7 +1402,7 @@
           ;; Non-validation phase: advance.
           :else
           (recur (inc phase-id) attempts' skip-flags
-                 validation-fail-counts results'))))))
+                 validation-fail-counts difficulty results')))))))
 
 (def full-spec-review-cap
   "Max number of review→fix rounds for the full-spec-review stage. The review
@@ -1475,14 +1520,21 @@
   remaining budget."
   [agent-fns challenge-name project-root agent-name model reasoning
    run-start-time run-start-millis]
-  ;; Framing stages (phase 0, decompose, full-spec-review) run on the hard
-  ;; tier — the highest-leverage reasoning stages. Subsystem cycles run on the
-  ;; tier matching each subsystem's classified difficulty.
-  (let [[frame-model frame-reasoning] (tier-config :hard)
-        run-stage! (fn [phase-id]
-                     (run-phase! agent-fns challenge-name phase-id 1 nil
-                                 project-root agent-name frame-model frame-reasoning
-                                 run-start-time run-start-millis))
+  ;; Decompose and full-spec-review run on the slow tier — the highest-leverage
+  ;; reasoning stages (structure and adversarial safety). Phase 0 (implicit
+  ;; spec) is requirements enumeration, not design, so it runs on the fast tier.
+  ;; Subproblem cycles run planning + validation on the slow tier and the rest
+  ;; on the tier chosen by phase 2's classification (see run-subsystem-phases!).
+  (let [fast-tier (tier-config :fast)
+        slow-tier (tier-config :slow)
+        [frame-model frame-reasoning] slow-tier
+        run-stage! (fn run-stage!
+                     ([phase-id] (run-stage! phase-id :slow))
+                     ([phase-id tier]
+                      (let [[m r] (tier-config tier)]
+                        (run-phase! agent-fns challenge-name phase-id 1 nil
+                                    project-root agent-name m r
+                                    run-start-time run-start-millis))))
         ;; nil when the stage invocation completed (exit 0, no timeout).
         stage-failure (fn [r results]
                         (cond
@@ -1512,7 +1564,7 @@
     (or
      ;; Stage: phase 0 (implicit spec).
      (budget-exceeded [] "phase 0")
-     (let [r0 (run-stage! 0)
+     (let [r0 (run-stage! 0 :fast)
            results [r0]]
        (or
         (stage-failure r0 results)
@@ -1522,32 +1574,25 @@
               results (conj results rd)]
           (or
            (stage-failure rd results)
-           ;; Determine subsystems from DECOMPOSITION.json. A
-           ;; missing/invalid file → a single unclassified whole-module cycle,
-           ;; run on the hard tier (no classification, so favor correctness).
-           ;; Each plan entry is {:slug <name-or-nil> :difficulty :normal|:hard}.
+           ;; Determine subsystems from DECOMPOSITION.json. A missing/invalid
+           ;; file → a single whole-module cycle (slug nil). Difficulty is NOT
+           ;; decided here — phase 2 classifies each subproblem after planning.
            (let [subsystems (read-decomposition project-root challenge-name)
                  multi? (> (count subsystems) 1)
-                 plan (cond
-                        (nil? subsystems) [{:slug nil :difficulty :hard}]
-                        multi? (mapv (fn [e] {:slug (:name e) :difficulty (:difficulty e)}) subsystems)
-                        :else [{:slug nil :difficulty (:difficulty (first subsystems))}])]
+                 slugs (if multi? (mapv :name subsystems) [nil])]
              (when (and *verbose* multi?)
                (println (format "  Decomposition: %d subsystems: %s"
-                                (count plan)
-                                (str/join ", " (map (fn [e] (format "%s(%s)" (:slug e) (name (:difficulty e)))) plan)))))
-             ;; Stage: phases 1→7 per subsystem, in DECOMPOSITION.json order.
-             (loop [remaining plan
+                                (count slugs) (str/join ", " slugs))))
+             ;; Stage: phases 1→7 (or collapsed build) per subsystem.
+             (loop [remaining slugs
                     results results]
                (if (seq remaining)
-                 (let [{:keys [slug difficulty]} (first remaining)
-                       [sub-model sub-reasoning] (tier-config difficulty)
+                 (let [slug (first remaining)
                        _ (when (and *verbose* slug)
-                           (println (format "  → subsystem %s [%s tier: model=%s effort=%s]"
-                                            slug (name difficulty) (or sub-model "default") (or sub-reasoning "default"))))
+                           (println (format "  → subsystem %s" slug)))
                        sub-result (run-subsystem-phases!
                                    agent-fns challenge-name slug project-root
-                                   agent-name sub-model sub-reasoning
+                                   agent-name fast-tier slow-tier
                                    run-start-time run-start-millis)
                        results' (into results (:phase-results sub-result))]
                    (if (= :pass (:status sub-result))
@@ -2056,24 +2101,24 @@
             {:keys [valid missing]} (validate-challenges (vec valid-challenges) project-root)
             agent-key (keyword (:agent opts))
             agent-name (:agent opts)
-            normal-model  (:normal-model opts)
-            normal-effort (:normal-effort opts)
-            hard-model    (:hard-model opts)
-            hard-effort   (:hard-effort opts)
-            missing-tier  (->> [[:normal-model normal-model] [:normal-effort normal-effort]
-                                [:hard-model hard-model] [:hard-effort hard-effort]]
-                               (filter (fn [[_ v]] (str/blank? (str v))))
-                               (mapv first))
-            ;; the hard tier labels the run in headers, reports, and the db
-            model hard-model
-            reasoning hard-effort]
+            fast-model   (:fast-model opts)
+            fast-effort  (:fast-effort opts)
+            slow-model   (:slow-model opts)
+            slow-effort  (:slow-effort opts)
+            missing-tier (->> [[:fast-model fast-model] [:fast-effort fast-effort]
+                               [:slow-model slow-model] [:slow-effort slow-effort]]
+                              (filter (fn [[_ v]] (str/blank? (str v))))
+                              (mapv first))
+            ;; the slow tier labels the run in headers, reports, and the db
+            model slow-model
+            reasoning slow-effort]
 
         (when (seq missing-tier)
           (binding [*out* *err*]
-            (println "Error: these required model-tier flags are missing:")
+            (println "Error: these required model flags are missing:")
             (doseq [k missing-tier]
               (println (str "  --" (name k))))
-            (println "All four of --normal-model, --normal-effort, --hard-model, --hard-effort are required."))
+            (println "All four of --fast-model, --fast-effort, --slow-model, --slow-effort are required."))
           (System/exit 1))
 
         (when (seq missing)
@@ -2087,18 +2132,18 @@
           (System/exit 0))
 
         (print-run-header agent-name (count valid) opts model reasoning)
-        (println (format "Tiers: normal=%s [%s] | hard/framing=%s [%s]"
-                         normal-model (resolve-effort normal-effort)
-                         hard-model (resolve-effort hard-effort)))
+        (println (format "Models: fast=%s [%s] | slow=%s [%s]"
+                         fast-model (resolve-effort fast-effort)
+                         slow-model (resolve-effort slow-effort)))
 
         (let [enc-key       (challenge-encryption-key)
               start-ms      (System/currentTimeMillis)
               results       (binding [*verbose* (or (:verbose opts) (:pretty opts))
                                       *pretty* (boolean (:pretty opts))
-                                      *normal-model* normal-model
-                                      *normal-reasoning* normal-effort
-                                      *hard-model* hard-model
-                                      *hard-reasoning* hard-effort]
+                                      *fast-model* fast-model
+                                      *fast-reasoning* fast-effort
+                                      *slow-model* slow-model
+                                      *slow-reasoning* slow-effort]
                               (run-challenges valid agent-key agent-name project-root model reasoning enc-key))
               total-elapsed-s (/ (- (System/currentTimeMillis) start-ms) 1000.0)]
           (print-summary-table results total-elapsed-s)

@@ -460,30 +460,30 @@
         (is (some #{"model_reasoning_effort=high"} cmd) "should contain reasoning config")))))
 
 (deftest tier-cli-parsing-test
-  ;; The four required model-tier flags parse into the opts map.
+  ;; The four required model flags parse into the opts map.
   (testing "model-tier CLI options"
-    (let [opts (cli/parse-opts ["--normal-model" "opus" "--normal-effort" "low"
-                                "--hard-model" "fable" "--hard-effort" "high"
+    (let [opts (cli/parse-opts ["--fast-model" "opus" "--fast-effort" "low"
+                                "--slow-model" "fable" "--slow-effort" "high"
                                 "--agent" "claude"]
                                {:spec cli-spec})]
-      (is (= "opus" (:normal-model opts)))
-      (is (= "low" (:normal-effort opts)))
-      (is (= "fable" (:hard-model opts)))
-      (is (= "high" (:hard-effort opts))))
-    (testing "absent tier flags leave the keys nil"
+      (is (= "opus" (:fast-model opts)))
+      (is (= "low" (:fast-effort opts)))
+      (is (= "fable" (:slow-model opts)))
+      (is (= "high" (:slow-effort opts))))
+    (testing "absent flags leave the keys nil"
       (let [opts (cli/parse-opts ["--agent" "claude"] {:spec cli-spec})]
-        (is (nil? (:normal-model opts)))
-        (is (nil? (:hard-effort opts)))))))
+        (is (nil? (:fast-model opts)))
+        (is (nil? (:slow-effort opts)))))))
 
 (deftest tier-config-test
   ;; tier-config resolves [model reasoning] from the dynamic tier vars.
   (testing "tier-config picks the right tier"
-    (binding [*normal-model* "opus"
-              *normal-reasoning* "low"
-              *hard-model* "fable"
-              *hard-reasoning* "high"]
-      (is (= ["opus" "low"] (tier-config :normal)))
-      (is (= ["fable" "high"] (tier-config :hard))))))
+    (binding [*fast-model* "opus"
+              *fast-reasoning* "low"
+              *slow-model* "fable"
+              *slow-reasoning* "high"]
+      (is (= ["opus" "low"] (tier-config :fast)))
+      (is (= ["fable" "high"] (tier-config :slow))))))
 
 (deftest print-run-header-model-test
   ;; Tests that print-run-header shows model in parentheses when provided
@@ -634,7 +634,7 @@
   [phase-id _subsystem _attempt]
   (cond
     (contains? #{2 4 6 7} phase-id) :pass
-    (contains? #{:full-spec-review :full-spec-fix} phase-id) :pass
+    (contains? #{:easy-build :full-spec-review :full-spec-fix} phase-id) :pass
     :else nil))
 
 (defn- decompose-fixture-script
@@ -653,39 +653,44 @@
   "Build an agent-fns :phase-cmd stub. Records [phase-id subsystem attempt]
   into `invocations` (attempt = how many times this [phase-id subsystem] pair
   has been invoked so far) and returns a bash command whose stdout carries the
-  scripted PHASE_VALIDATION verdict, if any."
-  [invocations verdict-fn challenge decomposition]
+  scripted PHASE_VALIDATION verdict, if any. For phase 2, also echoes a
+  PHASE_DIFFICULTY line when difficulty-fn returns one."
+  [invocations verdict-fn difficulty-fn challenge decomposition]
   (fn [_challenge-name phase-id _project-root _model _reasoning subsystem]
     (let [attempt (inc (count (filter (fn [[p s _]] (and (= p phase-id) (= s subsystem)))
                                       @invocations)))]
       (swap! invocations conj [phase-id subsystem attempt])
       (let [verdict (verdict-fn phase-id subsystem attempt)
+            diff    (when (= phase-id 2) (difficulty-fn subsystem attempt))
             base    (if (= :decompose phase-id)
                       (decompose-fixture-script challenge decomposition)
                       "true")
-            script  (if verdict
-                      (str base " && echo PHASE_VALIDATION:" (name verdict))
-                      base)]
+            script  (cond-> base
+                      verdict (str " && echo PHASE_VALIDATION:" (name verdict))
+                      diff    (str " && echo PHASE_DIFFICULTY:" (name diff)))]
         ["bash" "-c" script]))))
 
 (defn- simulate-phase-loop
   "Run phase-loop! against a stubbed agent-fns :phase-cmd. Options:
     :verdict-fn     (fn [phase-id subsystem attempt] verdict-or-nil) — defaults
                     to passing-verdicts
+    :difficulty-fn  (fn [subsystem attempt] :easy|:medium|:hard|nil) — phase 2
+                    classification; defaults to :medium (gated, fast tier)
     :decomposition  EDN vector the stubbed decompose stage writes to
                     DECOMPOSITION.json, or nil to leave the file missing
   Returns {:result      <phase-loop! result>
            :invocations [[phase-id subsystem attempt] ...]
            :transcripts [transcript file names written by save-transcript!]
            :reasoning   REASONING.md content (runner-written sentinels)}."
-  [{:keys [verdict-fn decomposition]}]
+  [{:keys [verdict-fn difficulty-fn decomposition]}]
   (let [verdict-fn (or verdict-fn passing-verdicts)
+        difficulty-fn (or difficulty-fn (fn [_subsystem _attempt] :medium))
         tmp-root (str (babashka.fs/create-temp-dir))
         project-dir (str (babashka.fs/path tmp-root "project"))
         challenge "sim-ch"
         impl-dir (babashka.fs/path project-dir "implementations" challenge)
         invocations (atom [])
-        agent-fns {:phase-cmd (scripted-phase-cmd invocations verdict-fn
+        agent-fns {:phase-cmd (scripted-phase-cmd invocations verdict-fn difficulty-fn
                                                   challenge decomposition)}]
     (babashka.fs/create-dirs impl-dir)
     (try
@@ -710,19 +715,19 @@
         (babashka.fs/delete-tree tmp-root)))))
 
 (def ^:private single-subsystem-decomposition
-  [{:name "whole" :scope "Build the whole module per the full spec." :difficulty "hard"}])
+  [{:name "whole" :scope "Build the whole module per the full spec."}])
 
 (def ^:private two-subsystem-decomposition
-  [{:name "alpha" :scope "Alpha scope." :difficulty "normal"}
-   {:name "beta" :scope "Beta scope." :difficulty "hard"}])
+  [{:name "alpha" :scope "Alpha scope."}
+   {:name "beta" :scope "Beta scope."}])
 
 (deftest read-decomposition-test
   ;; Tests parsing of DECOMPOSITION.json: a JSON array of subsystem objects
-  ;; ({"name": ..., "scope": ..., "difficulty": ...}) in dependency order; the
-  ;; runner consumes the "name" order and per-entry "difficulty". Every entry
-  ;; must be an object with non-empty "name" and "scope" strings; anything
-  ;; malformed returns nil (single-subsystem fallback) with a stderr warning,
-  ;; never a throw. Missing/invalid "difficulty" defaults to :normal.
+  ;; ({"name": ..., "scope": ...}) in dependency order; the runner consumes the
+  ;; "name" order (difficulty is decided later by phase 2, not here). Every
+  ;; entry must be an object with non-empty "name" and "scope" strings;
+  ;; anything malformed returns nil (single-subsystem fallback) with a stderr
+  ;; warning, never a throw.
   (testing "read-decomposition"
     (let [tmp-root (str (babashka.fs/create-temp-dir))
           challenge "rd-ch"
@@ -735,19 +740,13 @@
                   (binding [*err* (java.io.StringWriter.)] ; silence warnings
                     (read-decomposition tmp-root challenge)))]
       (try
-        (testing "array of name+scope+difficulty objects yields {:name :difficulty} maps"
-          (write! (json/generate-string [{:name "alpha" :scope "base state" :difficulty "normal"}
-                                         {:name "beta" :scope "derived views" :difficulty "hard"}]))
-          (is (= [{:name "alpha" :difficulty :normal}
-                  {:name "beta" :difficulty :hard}] (read!))))
-        (testing "missing/invalid difficulty defaults to :normal"
-          (write! (json/generate-string [{:name "alpha" :scope "s"}
-                                         {:name "beta" :scope "s" :difficulty "bogus"}]))
-          (is (= [{:name "alpha" :difficulty :normal}
-                  {:name "beta" :difficulty :normal}] (read!))))
-        (testing "difficulty is case-insensitive"
-          (write! (json/generate-string [{:name "alpha" :scope "s" :difficulty "HARD"}]))
-          (is (= [{:name "alpha" :difficulty :hard}] (read!))))
+        (testing "array of name+scope objects yields {:name} maps in order"
+          (write! (json/generate-string [{:name "alpha" :scope "base state"}
+                                         {:name "beta" :scope "derived views"}]))
+          (is (= [{:name "alpha"} {:name "beta"}] (read!))))
+        (testing "any extra keys (e.g. difficulty) are ignored"
+          (write! (json/generate-string [{:name "alpha" :scope "s" :difficulty "hard"}]))
+          (is (= [{:name "alpha"}] (read!))))
         (testing "plain name strings are rejected"
           (write! "[\"graph\", \"delivery\"]")
           (is (nil? (read!))))
@@ -763,8 +762,7 @@
         (testing "names are trimmed"
           (write! (json/generate-string [{:name " graph " :scope "s1"}
                                          {:name "delivery" :scope "s2"}]))
-          (is (= [{:name "graph" :difficulty :normal}
-                  {:name "delivery" :difficulty :normal}] (read!))))
+          (is (= [{:name "graph"} {:name "delivery"}] (read!))))
         (testing "duplicate names fall back to nil"
           (write! (json/generate-string [{:name "graph" :scope "s1"}
                                          {:name "graph" :scope "s2"}]))
@@ -831,6 +829,34 @@
               [:full-spec-review nil 1]]
              invocations))
       (is (= :pass (:status result))))))
+
+(deftest phase-loop-difficulty-routing-test
+  ;; Phase 2's classification routes the post-validation work.
+  (testing "easy → collapses phases 3-7 into a single :easy-build session"
+    (let [{:keys [result invocations]}
+          (simulate-phase-loop {:decomposition single-subsystem-decomposition
+                                :difficulty-fn (fn [_sub _attempt] :easy)})]
+      (is (= [[0 nil 1] [:decompose nil 1]
+              [1 nil 1] [2 nil 1] [:easy-build nil 1]
+              [:full-spec-review nil 1]]
+             invocations)
+          "easy runs 0, decompose, plan, plan-validate, ONE build, review — no 3-7")
+      (is (= :pass (:status result)))))
+  (testing "medium → runs the gated 3-7 loop (default)"
+    (let [{:keys [invocations]}
+          (simulate-phase-loop {:decomposition single-subsystem-decomposition
+                                :difficulty-fn (fn [_sub _attempt] :medium)})]
+      (is (= [[0 nil 1] [:decompose nil 1]
+              [1 nil 1] [2 nil 1] [3 nil 1] [4 nil 1] [5 nil 1] [6 nil 1] [7 nil 1]
+              [:full-spec-review nil 1]]
+             invocations)
+          "medium runs the full gated pipeline, no :easy-build")))
+  (testing "hard → also runs the gated 3-7 loop (differs only in model tier)"
+    (let [{:keys [invocations]}
+          (simulate-phase-loop {:decomposition single-subsystem-decomposition
+                                :difficulty-fn (fn [_sub _attempt] :hard)})]
+      (is (not-any? (fn [[p _ _]] (= p :easy-build)) invocations))
+      (is (some (fn [[p _ _]] (= p 7)) invocations)))))
 
 (deftest phase-loop-two-subsystem-test
   ;; Two subsystems run phases 1-7 twice, in dependency order, with the slug

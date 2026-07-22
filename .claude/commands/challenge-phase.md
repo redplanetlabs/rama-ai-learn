@@ -90,6 +90,7 @@ Read the per-phase doc for `<phase_id>` and follow it. Do not read other phase d
 | 5 | `plugins/rama-skill/skills/rama/references/phase-5-tests.md` | `implementations/<challenge_name>/test/...` |
 | 6 | `plugins/rama-skill/skills/rama/references/phase-6-test-validate.md` | `implementations/<challenge_name>/TEST_VALIDATION.md` |
 | 7 | `plugins/rama-skill/skills/rama/references/phase-7-finish.md` | passing tests; module + tests modified in place |
+| easy-build | `plugins/rama-skill/skills/rama/references/phase-easy-build.md` | passing tests; module + tests written in place |
 | full-spec-review | `plugins/rama-skill/skills/rama/references/phase-full-spec-review.md` (review session) | `implementations/<challenge_name>/FULL_SPEC_REVIEW.md` |
 | full-spec-fix | `plugins/rama-skill/skills/rama/references/phase-full-spec-review.md` (fix session) | module + tests fixed in place; full suite passing |
 
@@ -97,7 +98,7 @@ The implementation root is `implementations/<challenge_name>/` — substitute th
 
 The skill root is `plugins/rama-skill/skills/rama/` — substitute this for `<skill-root>` in any cp command in the per-phase doc.
 
-**Decompose stage only:** `DECOMPOSITION.json` is read by the orchestrating runner to drive the per-subsystem cycles (it takes the `"name"` order and each entry's `"difficulty"` to pick the model tier; phase agents read the `"scope"` entries). Every entry needs `"name"`, `"scope"`, and `"difficulty"` (`"normal"` or `"hard"`). Verify it parses as JSON before finishing — if it is missing or malformed the runner silently falls back to a single-subsystem build and your decomposition is discarded.
+**Decompose stage only:** `DECOMPOSITION.json` is read by the orchestrating runner to drive the per-subsystem cycles (it takes the `"name"` order; phase agents read the `"scope"` entries). Every entry needs `"name"` and `"scope"`. Verify it parses as JSON before finishing — if it is missing or malformed the runner silently falls back to a single-subsystem build and your decomposition is discarded.
 
 ## Subsystem (third argument, phases 1..7 only)
 
@@ -145,7 +146,7 @@ If a validation artifact already exists from a prior attempt at this phase or a 
 
 ## Verdict emission (validation phases only)
 
-Phases 2, 4, 6, 7, full-spec-review, and full-spec-fix emit verdicts as the LAST non-empty line of output. The runner extracts this line; do not put any text after it.
+Phases 2, 4, 6, 7, easy-build, full-spec-review, and full-spec-fix emit verdicts as the LAST non-empty line of output. The runner extracts this line; do not put any text after it.
 
 - **Phase 2** (plan validation), **Phase 4** (impl validation), and **Phase 6** (test validation) — three-way verdict:
   ```
@@ -154,7 +155,15 @@ Phases 2, 4, 6, 7, full-spec-review, and full-spec-fix emit verdicts as the LAST
   PHASE_VALIDATION:major-fail
   ```
   See the artifact template and per-phase doc for the rubric distinguishing minor from major. For Phase 2, minor-fail means the validator fixed PLAN.md directly and the build proceeds; major-fail sends the build back to Phase 1.
-- **Phase 7** (finish) — binary verdict reflecting whether tests pass:
+
+  **Phase 2 also emits a difficulty classification** on the line BEFORE the verdict (only when the verdict is pass or minor-fail):
+  ```
+  PHASE_DIFFICULTY:easy
+  PHASE_DIFFICULTY:medium
+  PHASE_DIFFICULTY:hard
+  ```
+  This routes the rest of the build: **easy** collapses phases 3–7 into a single `easy-build` session on the fast model; **medium** runs the gated phases 3–7 on the fast model; **hard** runs the gated phases 3–7 on the slow model. See `phase-2-plan-validate.md` for the criteria. If omitted, the runner defaults to `medium`.
+- **Phase 7** (finish) and **easy-build** — binary verdict reflecting whether tests pass:
   ```
   PHASE_VALIDATION:pass
   PHASE_VALIDATION:fail
@@ -165,6 +174,8 @@ Phases 2, 4, 6, 7, full-spec-review, and full-spec-fix emit verdicts as the LAST
 Default to FAIL (or `major-fail` for phases 2, 4, and 6). PASS only after the criteria in the per-phase doc are met.
 
 Other phases (0, decompose, 1, 3, 5) do not emit a verdict — the runner moves on once the output artifact exists.
+
+The `easy-build` phase does all of phases 3–7's work — implement, validate the implementation, write tests, validate the tests, iterate to a green suite — but in one session instead of separate fresh-context ones, then emits its binary verdict. On multi-subsystem runs it carries the subsystem slug like the numbered phases.
 
 ## Production deployment
 
