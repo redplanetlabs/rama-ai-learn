@@ -459,22 +459,31 @@
         (is (some #{"-c"} cmd) "should contain -c")
         (is (some #{"model_reasoning_effort=high"} cmd) "should contain reasoning config")))))
 
-(deftest reasoning-cli-parsing-test
-  ;; Tests that --reasoning / -r is parsed by cli-spec and produces
-  ;; :reasoning "LEVEL" in the opts map.
-  (testing "--reasoning CLI option"
-    (testing "when --reasoning is passed"
-      (let [opts (cli/parse-opts ["--reasoning" "high" "--agent" "claude"] {:spec cli-spec})]
-        (is (= "high" (:reasoning opts))
-            "should set :reasoning to the provided value")))
-    (testing "when -r short form is passed"
-      (let [opts (cli/parse-opts ["-r" "low" "--agent" "claude"] {:spec cli-spec})]
-        (is (= "low" (:reasoning opts))
-            "should set :reasoning via alias")))
-    (testing "when --reasoning is not passed"
+(deftest tier-cli-parsing-test
+  ;; The four required model-tier flags parse into the opts map.
+  (testing "model-tier CLI options"
+    (let [opts (cli/parse-opts ["--normal-model" "opus" "--normal-effort" "low"
+                                "--hard-model" "fable" "--hard-effort" "high"
+                                "--agent" "claude"]
+                               {:spec cli-spec})]
+      (is (= "opus" (:normal-model opts)))
+      (is (= "low" (:normal-effort opts)))
+      (is (= "fable" (:hard-model opts)))
+      (is (= "high" (:hard-effort opts))))
+    (testing "absent tier flags leave the keys nil"
       (let [opts (cli/parse-opts ["--agent" "claude"] {:spec cli-spec})]
-        (is (nil? (:reasoning opts))
-            "should leave :reasoning absent")))))
+        (is (nil? (:normal-model opts)))
+        (is (nil? (:hard-effort opts)))))))
+
+(deftest tier-config-test
+  ;; tier-config resolves [model reasoning] from the dynamic tier vars.
+  (testing "tier-config picks the right tier"
+    (binding [*normal-model* "opus"
+              *normal-reasoning* "low"
+              *hard-model* "fable"
+              *hard-reasoning* "high"]
+      (is (= ["opus" "low"] (tier-config :normal)))
+      (is (= ["fable" "high"] (tier-config :hard))))))
 
 (deftest print-run-header-model-test
   ;; Tests that print-run-header shows model in parentheses when provided
@@ -701,18 +710,19 @@
         (babashka.fs/delete-tree tmp-root)))))
 
 (def ^:private single-subsystem-decomposition
-  [{:name "whole" :scope "Build the whole module per the full spec."}])
+  [{:name "whole" :scope "Build the whole module per the full spec." :difficulty "hard"}])
 
 (def ^:private two-subsystem-decomposition
-  [{:name "alpha" :scope "Alpha scope."}
-   {:name "beta" :scope "Beta scope."}])
+  [{:name "alpha" :scope "Alpha scope." :difficulty "normal"}
+   {:name "beta" :scope "Beta scope." :difficulty "hard"}])
 
 (deftest read-decomposition-test
   ;; Tests parsing of DECOMPOSITION.json: a JSON array of subsystem objects
-  ;; ({"name": ..., "scope": ...}) in dependency order; the runner consumes
-  ;; only the "name" order. Every entry must be an object with non-empty
-  ;; "name" and "scope" strings; anything malformed returns nil
-  ;; (single-subsystem fallback) with a stderr warning, never a throw.
+  ;; ({"name": ..., "scope": ..., "difficulty": ...}) in dependency order; the
+  ;; runner consumes the "name" order and per-entry "difficulty". Every entry
+  ;; must be an object with non-empty "name" and "scope" strings; anything
+  ;; malformed returns nil (single-subsystem fallback) with a stderr warning,
+  ;; never a throw. Missing/invalid "difficulty" defaults to :normal.
   (testing "read-decomposition"
     (let [tmp-root (str (babashka.fs/create-temp-dir))
           challenge "rd-ch"
@@ -725,10 +735,19 @@
                   (binding [*err* (java.io.StringWriter.)] ; silence warnings
                     (read-decomposition tmp-root challenge)))]
       (try
-        (testing "array of name+scope objects (required shape) yields the name values"
-          (write! (json/generate-string [{:name "alpha" :scope "base state"}
-                                         {:name "beta" :scope "derived views"}]))
-          (is (= ["alpha" "beta"] (read!))))
+        (testing "array of name+scope+difficulty objects yields {:name :difficulty} maps"
+          (write! (json/generate-string [{:name "alpha" :scope "base state" :difficulty "normal"}
+                                         {:name "beta" :scope "derived views" :difficulty "hard"}]))
+          (is (= [{:name "alpha" :difficulty :normal}
+                  {:name "beta" :difficulty :hard}] (read!))))
+        (testing "missing/invalid difficulty defaults to :normal"
+          (write! (json/generate-string [{:name "alpha" :scope "s"}
+                                         {:name "beta" :scope "s" :difficulty "bogus"}]))
+          (is (= [{:name "alpha" :difficulty :normal}
+                  {:name "beta" :difficulty :normal}] (read!))))
+        (testing "difficulty is case-insensitive"
+          (write! (json/generate-string [{:name "alpha" :scope "s" :difficulty "HARD"}]))
+          (is (= [{:name "alpha" :difficulty :hard}] (read!))))
         (testing "plain name strings are rejected"
           (write! "[\"graph\", \"delivery\"]")
           (is (nil? (read!))))
@@ -744,7 +763,8 @@
         (testing "names are trimmed"
           (write! (json/generate-string [{:name " graph " :scope "s1"}
                                          {:name "delivery" :scope "s2"}]))
-          (is (= ["graph" "delivery"] (read!))))
+          (is (= [{:name "graph" :difficulty :normal}
+                  {:name "delivery" :difficulty :normal}] (read!))))
         (testing "duplicate names fall back to nil"
           (write! (json/generate-string [{:name "graph" :scope "s1"}
                                          {:name "graph" :scope "s2"}]))

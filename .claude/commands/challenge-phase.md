@@ -97,7 +97,7 @@ The implementation root is `implementations/<challenge_name>/` — substitute th
 
 The skill root is `plugins/rama-skill/skills/rama/` — substitute this for `<skill-root>` in any cp command in the per-phase doc.
 
-**Decompose stage only:** `DECOMPOSITION.json` is read by the orchestrating runner to drive the per-subsystem cycles (it takes the `"name"` order; phase agents read the `"scope"` entries). Verify it parses as JSON before finishing — if it is missing or malformed the runner silently falls back to a single-subsystem build and your decomposition is discarded.
+**Decompose stage only:** `DECOMPOSITION.json` is read by the orchestrating runner to drive the per-subsystem cycles (it takes the `"name"` order and each entry's `"difficulty"` to pick the model tier; phase agents read the `"scope"` entries). Every entry needs `"name"`, `"scope"`, and `"difficulty"` (`"normal"` or `"hard"`). Verify it parses as JSON before finishing — if it is missing or malformed the runner silently falls back to a single-subsystem build and your decomposition is discarded.
 
 ## Subsystem (third argument, phases 1..7 only)
 

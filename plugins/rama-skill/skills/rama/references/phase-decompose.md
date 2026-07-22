@@ -18,15 +18,20 @@ A scope names purpose, never design: it may say what a piece of state is for, po
 
 **3. Requirements bind by reference.** Later stages' needs are never rewritten into earlier scopes as new requirements — the full spec already states them; the earlier scope points to the full-spec requirements its state must make achievable. Never judge whether a requirement can be satisfied — that is the build cycles' job, and their gates enforce the spec. Reject a boundary only when a stage's deliverable cannot be stated as a scope, never because the work looks hard.
 
+## Difficulty
+
+Classify each stage `"normal"` or `"hard"`. A stage is **hard** when it is not obvious what PState schema and partitioning scheme it needs — the right data layout requires exploring alternatives and costing them. A stage is **normal** when the layout is obvious once the scope is read, like using hash partitioning for the PState with a straightforward schema. Judge only the state-design difficulty, not the amount of code. When genuinely unsure, mark it hard.
+
 ## Output
 
-`<impl-root>/DECOMPOSITION.json` — a JSON array of `{"name": "kebab-case-slug", "scope": "..."}` in dependency order. A single-stage decomposition is one entry whose scope is the whole spec.
+`<impl-root>/DECOMPOSITION.json` — a JSON array of `{"name": "kebab-case-slug", "scope": "...", "difficulty": "normal"|"hard"}` in dependency order. A single-stage decomposition is one entry whose scope is the whole spec.
 
 ## Checklist
 
 Verify each item before finishing; record failures and fixes in the reasoning log.
 
 - Every hard part of the problem has its own stage; no trivial part left unfolded.
+- Every stage has a `"difficulty"` of `"normal"` or `"hard"`, judged on whether its PState/partitioning design is obvious or needs exploration.
 - NOTHING duplicated: scan every scope for requirement text, numbers, tables, distributions, edge cases, or bounds restated from the full spec — replace each with a pointer to the spec.
 - Every operation owned exactly once; the scopes together cover every operation of the full spec.
 - Every piece of state a later stage consumes appears in the scope of the earlier stage that writes it, with a pointer to the full-spec requirements that bind it.

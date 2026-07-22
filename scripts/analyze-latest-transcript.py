@@ -247,8 +247,12 @@ def cmd_decomposition(lines, args):
         return
     for entry in entries:
         name = entry.get('name') if isinstance(entry, dict) else str(entry)
+        difficulty = entry.get('difficulty') if isinstance(entry, dict) else None
         print("=" * 72)
-        print(f"SUBSYSTEM: {name}")
+        header = f"SUBSYSTEM: {name}"
+        if difficulty:
+            header += f"  [{difficulty}]"
+        print(header)
         print("=" * 72)
         if isinstance(entry, dict) and entry.get('scope'):
             print(entry['scope'])

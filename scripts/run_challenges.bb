@@ -23,13 +23,13 @@
    :agent      {:desc "Agent to use: claude or codex (default: claude)"
                 :alias :a
                 :default "claude"}
-   :model      {:desc "Model to use (e.g. sonnet, opus, haiku)"
-                :alias :m}
+   :normal-model  {:desc "Model for normal-difficulty subsystem cycles (required)"}
+   :normal-effort {:desc "Reasoning effort for normal-difficulty cycles (required)"}
+   :hard-model    {:desc "Model for hard-difficulty cycles + framing stages (required)"}
+   :hard-effort   {:desc "Reasoning effort for hard-difficulty cycles + framing (required)"}
    :verbose    {:desc "Stream agent output to console in real time"
                 :alias :v
                 :coerce :boolean}
-   :reasoning  {:desc "Reasoning effort level (e.g. low, medium, high)"
-                :alias :r}
    :pretty     {:desc "Pretty-print agent output (implies --verbose)"
                 :alias :p
                 :coerce :boolean}
@@ -120,10 +120,16 @@
   (println "  -b, --batch N           Batch number to run (1-5)")
   (println "  -d, --difficulty TYPE   Difficulty filter: standard or hard")
   (println "  -a, --agent NAME        Agent to use: claude or codex (default: claude)")
-  (println "  -m, --model MODEL       Model to use (e.g. sonnet, opus, haiku)")
-  (println "  -r, --reasoning LEVEL   Reasoning effort level (e.g. low, medium, high)")
+  (println "      --normal-model M    Model for normal-difficulty cycles (required)")
+  (println "      --normal-effort E   Reasoning effort for normal-difficulty cycles (required)")
+  (println "      --hard-model M      Model for hard-difficulty cycles + framing stages (required)")
+  (println "      --hard-effort E     Reasoning effort for hard-difficulty cycles + framing (required)")
   (println "  -v, --verbose           Stream agent output to console in real time")
   (println "  -h, --help              Show this help")
+  (println)
+  (println "The decompose stage classifies each subsystem normal|hard; the runner")
+  (println "runs each on the matching tier. Framing stages (phase 0, decompose,")
+  (println "full-spec-review) run on the hard tier.")
   (println)
   (println "Note: Batch 5 (cluster operations) requires a running local Rama cluster.")
   (println "      Set RAMA_CONDUCTOR_HOST/RAMA_CONDUCTOR_UI_PORT to override defaults.")
@@ -537,6 +543,24 @@
 (def ^:dynamic *verbose* false)
 
 (def ^:dynamic *pretty* false)
+
+;; Per-difficulty model/effort tiers. The decompose stage classifies each
+;; subsystem as "normal" or "hard"; the runner executes that subsystem's
+;; phases with the matching tier. Framing stages (phase 0, decompose,
+;; full-spec-review) use the hard tier — they are the highest-leverage
+;; reasoning stages. Each defaults to nil (= inherit the agent's default);
+;; -main resolves them from CLI opts, falling back to --model/--reasoning.
+(def ^:dynamic *normal-model* nil)
+(def ^:dynamic *normal-reasoning* nil)
+(def ^:dynamic *hard-model* nil)
+(def ^:dynamic *hard-reasoning* nil)
+
+(defn tier-config
+  "Return [model reasoning] for a difficulty keyword (:normal | :hard)."
+  [difficulty]
+  (if (= :hard difficulty)
+    [*hard-model* *hard-reasoning*]
+    [*normal-model* *normal-reasoning*]))
 
 ;;; Pretty-printing stream-json output
 
@@ -1105,26 +1129,39 @@
 (defn read-decomposition
   "Read implementations/<challenge>/DECOMPOSITION.json written by the
   decompose stage. The required shape is a JSON array of subsystem objects in
-  dependency order, each with a non-empty \"name\" and \"scope\":
-  [{\"name\": \"graph\", \"scope\": \"...\"}, ...]; the runner consumes only
-  the \"name\" order (phase agents read the \"scope\" entries). Returns a
-  non-empty vector of distinct, trimmed, non-empty name strings, or nil when
-  the file is missing, unparseable, empty, or malformed — the caller then
-  treats the module as a single subsystem. Never throws."
+  dependency order, each with a non-empty \"name\", a non-empty \"scope\", and
+  a \"difficulty\" of \"normal\" or \"hard\":
+  [{\"name\": \"graph\", \"scope\": \"...\", \"difficulty\": \"hard\"}, ...].
+  The runner consumes the \"name\" order and per-entry \"difficulty\" (to pick
+  the model tier); phase agents read the \"scope\" entries. Returns a non-empty
+  vector of {:name <trimmed string> :difficulty :normal|:hard} in file order,
+  or nil when the file is missing, unparseable, empty, or malformed — the
+  caller then treats the module as a single subsystem. A missing/invalid
+  \"difficulty\" on an otherwise-valid entry defaults to :normal (warned), not
+  fatal. Never throws."
   [project-root challenge-name]
   (let [path (fs/path project-root "implementations" challenge-name "DECOMPOSITION.json")
         warn! (fn [msg]
                 (binding [*out* *err*]
                   (println (format "WARN: %s — treating %s as a single subsystem."
                                    msg challenge-name))))
-        entry-name (fn [entry]
+        entry->map (fn [entry]
                      (when (and (map? entry)
                                 (string? (:scope entry))
                                 (seq (str/trim (:scope entry))))
                        (let [n (:name entry)]
                          (when (string? n)
-                           (let [trimmed (str/trim n)]
-                             (when (seq trimmed) trimmed))))))]
+                           (let [trimmed (str/trim n)
+                                 diff (some-> (:difficulty entry) str str/trim str/lower-case)]
+                             (when (seq trimmed)
+                               {:name trimmed
+                                :difficulty (cond
+                                              (= diff "hard") :hard
+                                              (= diff "normal") :normal
+                                              :else (do (binding [*out* *err*]
+                                                          (println (format "WARN: subsystem %s has missing/invalid difficulty %s — defaulting to normal."
+                                                                           trimmed (pr-str (:difficulty entry)))))
+                                                        :normal))}))))))]
     (if-not (fs/exists? path)
       (do (warn! (str "DECOMPOSITION.json missing at " path)) nil)
       ;; cheshire parses top-level JSON arrays lazily — force realization
@@ -1143,15 +1180,15 @@
           (do (warn! "DECOMPOSITION.json is empty") nil)
 
           :else
-          (let [names (mapv entry-name parsed)]
+          (let [entries (mapv entry->map parsed)]
             (cond
-              (some nil? names)
+              (some nil? entries)
               (do (warn! "DECOMPOSITION.json entries must be objects with non-empty \"name\" and \"scope\" strings") nil)
 
-              (not (apply distinct? names))
+              (not (apply distinct? (map :name entries)))
               (do (warn! "DECOMPOSITION.json subsystem names must be distinct") nil)
 
-              :else names)))))))
+              :else entries)))))))
 
 (defn run-subsystem-phases!
   "Drive phases 1→7 for one subsystem. `subsystem` is nil on single-subsystem
@@ -1438,9 +1475,13 @@
   remaining budget."
   [agent-fns challenge-name project-root agent-name model reasoning
    run-start-time run-start-millis]
-  (let [run-stage! (fn [phase-id]
+  ;; Framing stages (phase 0, decompose, full-spec-review) run on the hard
+  ;; tier — the highest-leverage reasoning stages. Subsystem cycles run on the
+  ;; tier matching each subsystem's classified difficulty.
+  (let [[frame-model frame-reasoning] (tier-config :hard)
+        run-stage! (fn [phase-id]
                      (run-phase! agent-fns challenge-name phase-id 1 nil
-                                 project-root agent-name model reasoning
+                                 project-root agent-name frame-model frame-reasoning
                                  run-start-time run-start-millis))
         ;; nil when the stage invocation completed (exit 0, no timeout).
         stage-failure (fn [r results]
@@ -1481,22 +1522,32 @@
               results (conj results rd)]
           (or
            (stage-failure rd results)
-           ;; Determine subsystems from DECOMPOSITION.json. n == 1 (including a
-           ;; missing/invalid .edn) → a single cycle with no subsystem slug.
+           ;; Determine subsystems from DECOMPOSITION.json. A
+           ;; missing/invalid file → a single unclassified whole-module cycle,
+           ;; run on the hard tier (no classification, so favor correctness).
+           ;; Each plan entry is {:slug <name-or-nil> :difficulty :normal|:hard}.
            (let [subsystems (read-decomposition project-root challenge-name)
                  multi? (> (count subsystems) 1)
-                 slugs (if multi? subsystems [nil])]
+                 plan (cond
+                        (nil? subsystems) [{:slug nil :difficulty :hard}]
+                        multi? (mapv (fn [e] {:slug (:name e) :difficulty (:difficulty e)}) subsystems)
+                        :else [{:slug nil :difficulty (:difficulty (first subsystems))}])]
              (when (and *verbose* multi?)
                (println (format "  Decomposition: %d subsystems: %s"
-                                (count slugs) (str/join ", " slugs))))
-             ;; Stage: phases 1→7 per subsystem, in .edn order.
-             (loop [remaining slugs
+                                (count plan)
+                                (str/join ", " (map (fn [e] (format "%s(%s)" (:slug e) (name (:difficulty e)))) plan)))))
+             ;; Stage: phases 1→7 per subsystem, in DECOMPOSITION.json order.
+             (loop [remaining plan
                     results results]
                (if (seq remaining)
-                 (let [slug (first remaining)
+                 (let [{:keys [slug difficulty]} (first remaining)
+                       [sub-model sub-reasoning] (tier-config difficulty)
+                       _ (when (and *verbose* slug)
+                           (println (format "  → subsystem %s [%s tier: model=%s effort=%s]"
+                                            slug (name difficulty) (or sub-model "default") (or sub-reasoning "default"))))
                        sub-result (run-subsystem-phases!
                                    agent-fns challenge-name slug project-root
-                                   agent-name model reasoning
+                                   agent-name sub-model sub-reasoning
                                    run-start-time run-start-millis)
                        results' (into results (:phase-results sub-result))]
                    (if (= :pass (:status sub-result))
@@ -1516,7 +1567,7 @@
                   (budget-exceeded results "stage full-spec-review")
                   (let [review-result (run-full-spec-review!
                                        agent-fns challenge-name project-root
-                                       agent-name model reasoning
+                                       agent-name frame-model frame-reasoning
                                        run-start-time run-start-millis)
                         results' (into results (:phase-results review-result))]
                     (cond-> {:status (:status review-result)
@@ -2005,8 +2056,25 @@
             {:keys [valid missing]} (validate-challenges (vec valid-challenges) project-root)
             agent-key (keyword (:agent opts))
             agent-name (:agent opts)
-            model (:model opts)
-            reasoning (:reasoning opts)]
+            normal-model  (:normal-model opts)
+            normal-effort (:normal-effort opts)
+            hard-model    (:hard-model opts)
+            hard-effort   (:hard-effort opts)
+            missing-tier  (->> [[:normal-model normal-model] [:normal-effort normal-effort]
+                                [:hard-model hard-model] [:hard-effort hard-effort]]
+                               (filter (fn [[_ v]] (str/blank? (str v))))
+                               (mapv first))
+            ;; the hard tier labels the run in headers, reports, and the db
+            model hard-model
+            reasoning hard-effort]
+
+        (when (seq missing-tier)
+          (binding [*out* *err*]
+            (println "Error: these required model-tier flags are missing:")
+            (doseq [k missing-tier]
+              (println (str "  --" (name k))))
+            (println "All four of --normal-model, --normal-effort, --hard-model, --hard-effort are required."))
+          (System/exit 1))
 
         (when (seq missing)
           (binding [*out* *err*]
@@ -2019,11 +2087,18 @@
           (System/exit 0))
 
         (print-run-header agent-name (count valid) opts model reasoning)
+        (println (format "Tiers: normal=%s [%s] | hard/framing=%s [%s]"
+                         normal-model (resolve-effort normal-effort)
+                         hard-model (resolve-effort hard-effort)))
 
         (let [enc-key       (challenge-encryption-key)
               start-ms      (System/currentTimeMillis)
               results       (binding [*verbose* (or (:verbose opts) (:pretty opts))
-                                      *pretty* (boolean (:pretty opts))]
+                                      *pretty* (boolean (:pretty opts))
+                                      *normal-model* normal-model
+                                      *normal-reasoning* normal-effort
+                                      *hard-model* hard-model
+                                      *hard-reasoning* hard-effort]
                               (run-challenges valid agent-key agent-name project-root model reasoning enc-key))
               total-elapsed-s (/ (- (System/currentTimeMillis) start-ms) 1000.0)]
           (print-summary-table results total-elapsed-s)
