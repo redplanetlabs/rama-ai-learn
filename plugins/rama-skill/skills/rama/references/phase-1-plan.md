@@ -66,7 +66,7 @@ The `|hash`/`|all` indicators rule out some bad partitionings but not all — a 
 
 **State primitive selection.** PStates are not the only state primitive. For state that does not need durable disk storage (e.g. derived caches that can be rebuilt from durable sources, expensive pre-merged views whose write volume would be prohibitive in a PState), use a TaskGlobal — see `references/task-globals.md`. For each piece of state in the design, decide explicitly:
 - PState: durable, indexed, partitioned. Use when the data is the source of truth or is a derived view whose write volume per source event is bounded by inputs the application controls.
-- TaskGlobal: in-memory per-task, non-durable, must be rebuildable from durable state if state is lost due to worker process restart of module update.
+- TaskGlobal: in-memory per-task, non-durable — lost on restart or module update. Acceptable when rebuildable from durable state, or when the spec tolerates losing it.
 - External system: database, queue, etc.
 
 Schema rules:

@@ -33,7 +33,7 @@ Validation phases (2, 4, 6) emit a verdict as the last line of agent output. Pha
 
 - Every phase produces a visible artifact. If a phase produces no artifact, the phase has been skipped.
 - Validation phases (2, 4, 6) default to FAIL. PASS only after explicit scenario-tracing.
-- Worker restart does NOT replay depot history. Topologies resume from their committed offset. Any non-durable state (TaskGlobals, in-memory caches) must have a concrete rebuild path that runs on worker restart, cited in the plan.
+- Worker restart does NOT replay depot history. Topologies resume from their committed offset. Non-durable state (TaskGlobals, in-memory caches) is lost on restart or module update — acceptable when rebuildable from durable state, or when the spec tolerates losing it.
 - PState write volume per source event must be bounded by inputs the application controls. If a write scales with the size of an unbounded external set (recipients, subscribers, members, etc.), PState is the wrong storage class — use a TaskGlobal or a different design.
 
 The skill-wide design rules (always-on production design, single-threaded task model, cooperative multitasking, performance costs, the "never trade X for code simplicity" rules) live in `SKILL.md`. Read it before starting Phase 0.
