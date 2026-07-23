@@ -119,3 +119,10 @@ For each storage location, state whether the current design is minimal or whethe
 - Can fields be stored as primitives instead of objects?
 - Can per-entry overhead be reduced by using arrays or packed representations instead of maps?
 - Does the design duplicate data across storage locations? If so, justify why (latency constraint) or eliminate. -->
+
+## Design difficulty log
+<!-- An honest, first-person record of where this design was hard to settle. Write it as you design, not as a summary. For each decision that was genuinely contested:
+- The decision (which PState schema, partitioning, placement, or topology).
+- The competing approach(es) you weighed, and how close the call was — was an alternative genuinely competitive, or was the choice forced once you costed it against the requirements?
+- What finally settled it.
+If nothing was contested — every choice was forced once the requirements were read — say so plainly and briefly. Do not manufacture difficulty; do not hide it. -->

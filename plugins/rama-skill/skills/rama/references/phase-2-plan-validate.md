@@ -44,17 +44,18 @@ When unsure between minor and major, choose **major-fail**.
 
 ## Difficulty classification
 
-When (and only when) the verdict is **pass** or **minor-fail**, also classify how much scrutiny the *rest* of the build — implementing and testing this now-vetted plan — needs. Emit it on the line BEFORE the verdict:
+When (and only when) the verdict is **pass** or **minor-fail**, classify how the rest of the build runs. Emit it on the line BEFORE the verdict:
 
 `PHASE_DIFFICULTY:easy`, `PHASE_DIFFICULTY:medium`, or `PHASE_DIFFICULTY:hard`.
 
-Judge the concrete plan you just validated, not the problem in the abstract:
+Consider these criteria when classifying:
 
-- **easy** — implementing this plan is mechanical; a fresh-eyes implementation and test review would only re-confirm it, not catch a design mistake.
-- **medium** — the plan is settled, but implementing it correctly is involved enough that an independent implementation/test review could catch a real bug.
-- **hard** — the plan's correctness hinges on a non-obvious design decision where a subtle implementation mistake is costly and every phase warrants the strongest scrutiny.
+1. **The plan's Design difficulty log and rejected-alternatives.** The log records where the author found the design contested; the rejected-alternatives show what was weighed. If a genuinely competitive alternative — not obviously worse — had to be beaten down, the design was a real choice, not the only sensible one.
+2. **Your own minimality and throughput checks.** Those made you construct alternative designs too. If any survived construction as competitive, the design was a real choice.
 
-When genuinely unsure, classify **up** — the cost of over-classifying is speed, of under-classifying is a missed defect.
+- **easy** — neither the plan nor your checks turned up a competitive alternative: the design was forced, so there is nothing to anchor on. One session; the rest collapses.
+- **medium** — a competitive alternative existed: the design was a real choice a builder could get wrong. Built on the fast model.
+- **hard** — settling among the competitive alternatives took deep analysis: finding the design needed the strong model's full effort, and it warrants that model throughout. Built on the slow model.
 
 ## Orchestration routing
 
