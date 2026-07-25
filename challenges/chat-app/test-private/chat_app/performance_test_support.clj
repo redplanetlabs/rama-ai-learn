@@ -172,6 +172,7 @@
 
         (testing "get-online-members cost is a bounded member scan"
           (doseq [u (concat [reader author] others)] (p/heartbeat! c u))
+          (harness/wait-for-processing! c)
           (is (= 20 (count (p/get-online-members c deep nil))))
           (let [info (capture-rocks-ops
                       (fn [] (p/get-online-members c deep nil)))]
@@ -223,6 +224,7 @@
             (is (= :offline (p/get-presence c ua))
                 "in-memory presence is lost on update (permitted loosening)")
             (p/heartbeat! c ua)
+            (harness/wait-for-processing! c)
             (is (= :online (p/get-presence c ua))))
 
           (testing "the module still processes writes after the update"

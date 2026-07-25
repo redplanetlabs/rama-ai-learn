@@ -41,7 +41,8 @@
      that was never created has no effect.")
   (leave-room! [this user-id room-id]
     "Remove user-id from the room's membership. Idempotent. The user's
-     unread count for the room disappears; messages they posted remain.")
+     read position for the room is discarded, so a later rejoin starts
+     with all current messages unread. Messages they posted remain.")
   (post-message! [this user-id room-id content]
     "Post a message to the room. The poster must currently be a member —
      a non-member post is rejected with no effect (no message, no

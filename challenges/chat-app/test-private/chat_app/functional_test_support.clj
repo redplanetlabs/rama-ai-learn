@@ -149,15 +149,18 @@
         (testing "presence: offline until heartbeat; unregistered heartbeats rejected"
           (is (= :offline (p/get-presence c (first users))))
           (p/heartbeat! c (first users))
+          (harness/wait-for-processing! c)
           (is (= :online (p/get-presence c (first users))))
           (is (= :offline (p/get-presence c (second users))))
           (p/heartbeat! c 987654321)
+          (harness/wait-for-processing! c)
           (is (= :offline (p/get-presence c 987654321))))
 
         (testing "online members: only online, ascending, cursor-paginated"
           (let [online (vec (sort (take 23 users)))
                 offline (drop 23 users)]
             (doseq [u online] (p/heartbeat! c u))
+            (harness/wait-for-processing! c)
             (let [page1 (p/get-online-members c room nil)
                   page2 (p/get-online-members c room (last page1))]
               (is (= 20 (count page1)))
