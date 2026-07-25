@@ -42,26 +42,11 @@ Emit one of `PHASE_VALIDATION:pass`, `PHASE_VALIDATION:minor-fail`, or `PHASE_VA
 
 When unsure between minor and major, choose **major-fail**.
 
-## Difficulty classification
-
-When (and only when) the verdict is **pass** or **minor-fail**, classify how the rest of the build runs. Emit it on the line BEFORE the verdict:
-
-`PHASE_DIFFICULTY:easy`, `PHASE_DIFFICULTY:medium`, or `PHASE_DIFFICULTY:hard`.
-
-Consider these criteria when classifying:
-
-1. **The plan's Design difficulty log and rejected-alternatives.** The log records where the author found the design contested; the rejected-alternatives show what was weighed. If a genuinely competitive alternative — not obviously worse — had to be beaten down, the design was a real choice, not the only sensible one.
-2. **Your own minimality and throughput checks.** Those made you construct alternative designs too. If any survived construction as competitive, the design was a real choice.
-
-- **easy** — neither the plan nor your checks turned up a competitive alternative: the design was forced, so there is nothing to anchor on. One session; the rest collapses.
-- **medium** — a competitive alternative existed: the design was a real choice a builder could get wrong. Built on the fast model.
-- **hard** — settling among the competitive alternatives took deep analysis: finding the design needed the strong model's full effort, and it warrants that model throughout. Built on the slow model.
-
 ## Orchestration routing
 
 This is a three-way verdict phase. The orchestrator uses the verdict to decide what happens next:
 
-- **pass** / **minor-fail** → the difficulty classification routes the rest of the build: **easy** collapses implementation and testing into a single `build` session; **medium** and **hard** run the gated phases 3–7 (differing only in which model executes them). On minor-fail the validator first fixes `PLAN.md` directly.
+- **pass** / **minor-fail** → proceed to the `build` phase (implement, validate, test, and iterate to green in one session). On minor-fail the validator first fixes `PLAN.md` directly.
 - **major-fail** → return to Phase 1 (plan) for revision. The plan author reads `PLAN_VALIDATION.md` and addresses every FAIL item. Up to 3 retry iterations; if the cap is hit, the orchestrator proceeds with the best plan so far.
 
 ## Do NOT

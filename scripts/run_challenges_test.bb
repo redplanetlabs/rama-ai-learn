@@ -633,8 +633,8 @@
   "Default verdict script: every gate passes; non-verdict phases emit none."
   [phase-id _subsystem _attempt]
   (cond
-    (contains? #{2 4 6 7} phase-id) :pass
-    (contains? #{:easy-build :full-spec-review :full-spec-fix} phase-id) :pass
+    (= 2 phase-id) :pass
+    (contains? #{:build :full-spec-review :full-spec-fix} phase-id) :pass
     :else nil))
 
 (defn- decompose-fixture-script
@@ -653,44 +653,38 @@
   "Build an agent-fns :phase-cmd stub. Records [phase-id subsystem attempt]
   into `invocations` (attempt = how many times this [phase-id subsystem] pair
   has been invoked so far) and returns a bash command whose stdout carries the
-  scripted PHASE_VALIDATION verdict, if any. For phase 2, also echoes a
-  PHASE_DIFFICULTY line when difficulty-fn returns one."
-  [invocations verdict-fn difficulty-fn challenge decomposition]
+  scripted PHASE_VALIDATION verdict, if any."
+  [invocations verdict-fn challenge decomposition]
   (fn [_challenge-name phase-id _project-root _model _reasoning subsystem]
     (let [attempt (inc (count (filter (fn [[p s _]] (and (= p phase-id) (= s subsystem)))
                                       @invocations)))]
       (swap! invocations conj [phase-id subsystem attempt])
       (let [verdict (verdict-fn phase-id subsystem attempt)
-            diff    (when (= phase-id 2) (difficulty-fn subsystem attempt))
             base    (if (= :decompose phase-id)
                       (decompose-fixture-script challenge decomposition)
                       "true")
             script  (cond-> base
-                      verdict (str " && echo PHASE_VALIDATION:" (name verdict))
-                      diff    (str " && echo PHASE_DIFFICULTY:" (name diff)))]
+                      verdict (str " && echo PHASE_VALIDATION:" (name verdict)))]
         ["bash" "-c" script]))))
 
 (defn- simulate-phase-loop
   "Run phase-loop! against a stubbed agent-fns :phase-cmd. Options:
     :verdict-fn     (fn [phase-id subsystem attempt] verdict-or-nil) — defaults
                     to passing-verdicts
-    :difficulty-fn  (fn [subsystem attempt] :easy|:medium|:hard|nil) — phase 2
-                    classification; defaults to :medium (gated, fast tier)
     :decomposition  EDN vector the stubbed decompose stage writes to
                     DECOMPOSITION.json, or nil to leave the file missing
   Returns {:result      <phase-loop! result>
            :invocations [[phase-id subsystem attempt] ...]
            :transcripts [transcript file names written by save-transcript!]
            :reasoning   REASONING.md content (runner-written sentinels)}."
-  [{:keys [verdict-fn difficulty-fn decomposition]}]
+  [{:keys [verdict-fn decomposition]}]
   (let [verdict-fn (or verdict-fn passing-verdicts)
-        difficulty-fn (or difficulty-fn (fn [_subsystem _attempt] :medium))
         tmp-root (str (babashka.fs/create-temp-dir))
         project-dir (str (babashka.fs/path tmp-root "project"))
         challenge "sim-ch"
         impl-dir (babashka.fs/path project-dir "implementations" challenge)
         invocations (atom [])
-        agent-fns {:phase-cmd (scripted-phase-cmd invocations verdict-fn difficulty-fn
+        agent-fns {:phase-cmd (scripted-phase-cmd invocations verdict-fn
                                                   challenge decomposition)}]
     (babashka.fs/create-dirs impl-dir)
     (try
@@ -797,27 +791,27 @@
     (let [{:keys [result invocations transcripts reasoning]}
           (simulate-phase-loop {:decomposition single-subsystem-decomposition})]
       (is (= [[0 nil 1] [:decompose nil 1]
-              [1 nil 1] [2 nil 1] [3 nil 1] [4 nil 1] [5 nil 1] [6 nil 1] [7 nil 1]
+              [1 nil 1] [2 nil 1] [:build nil 1]
               [:full-spec-review nil 1]]
              invocations)
-          "sequence = phase 0, decompose, phases 1-7 unsuffixed, full-spec review")
+          "sequence = phase 0, decompose, plan, plan-validate, build, full-spec review")
       (is (= :pass (:status result)))
       (is (= 1 (:iterations result)))
-      (testing "transcript filenames have NO subsystem segment (byte-identical to historical names)"
-        (is (some #(re-find #"-sim-ch-phase3\.jsonl$" %) transcripts))
+      (testing "transcript filenames have NO subsystem segment"
+        (is (some #(re-find #"-sim-ch-phasebuild\.jsonl$" %) transcripts))
         (is (some #(re-find #"-sim-ch-phasedecompose\.jsonl$" %) transcripts))
         (is (some #(re-find #"-sim-ch-phasefull-spec-review\.jsonl$" %) transcripts))
         (is (not-any? #(re-find #"-whole-" %) transcripts)
             "single-subsystem run must not tag transcripts with the slug"))
       (testing "reasoning sentinels have NO subsystem tag"
-        (is (re-find #"=== PHASE 3 attempt 1 — " reasoning))
+        (is (re-find #"=== PHASE BUILD attempt 1 — " reasoning))
         (is (re-find #"=== PHASE DECOMPOSE attempt 1 — " reasoning))
         (is (not (re-find #"\[whole\]" reasoning))))))
   (testing "missing DECOMPOSITION.json falls back to a single unsuffixed cycle"
     (let [{:keys [result invocations]}
           (simulate-phase-loop {:decomposition nil})]
       (is (= [[0 nil 1] [:decompose nil 1]
-              [1 nil 1] [2 nil 1] [3 nil 1] [4 nil 1] [5 nil 1] [6 nil 1] [7 nil 1]
+              [1 nil 1] [2 nil 1] [:build nil 1]
               [:full-spec-review nil 1]]
              invocations))
       (is (= :pass (:status result)))))
@@ -825,110 +819,61 @@
     (let [{:keys [result invocations]}
           (simulate-phase-loop {:decomposition {:not "a vector"}})]
       (is (= [[0 nil 1] [:decompose nil 1]
-              [1 nil 1] [2 nil 1] [3 nil 1] [4 nil 1] [5 nil 1] [6 nil 1] [7 nil 1]
+              [1 nil 1] [2 nil 1] [:build nil 1]
               [:full-spec-review nil 1]]
              invocations))
       (is (= :pass (:status result))))))
 
-(deftest phase-loop-difficulty-routing-test
-  ;; Phase 2's classification routes the post-validation work.
-  (testing "easy → collapses phases 3-7 into a single :easy-build session"
-    (let [{:keys [result invocations]}
-          (simulate-phase-loop {:decomposition single-subsystem-decomposition
-                                :difficulty-fn (fn [_sub _attempt] :easy)})]
-      (is (= [[0 nil 1] [:decompose nil 1]
-              [1 nil 1] [2 nil 1] [:easy-build nil 1]
-              [:full-spec-review nil 1]]
-             invocations)
-          "easy runs 0, decompose, plan, plan-validate, ONE build, review — no 3-7")
-      (is (= :pass (:status result)))))
-  (testing "medium → runs the gated 3-7 loop (default)"
-    (let [{:keys [invocations]}
-          (simulate-phase-loop {:decomposition single-subsystem-decomposition
-                                :difficulty-fn (fn [_sub _attempt] :medium)})]
-      (is (= [[0 nil 1] [:decompose nil 1]
-              [1 nil 1] [2 nil 1] [3 nil 1] [4 nil 1] [5 nil 1] [6 nil 1] [7 nil 1]
-              [:full-spec-review nil 1]]
-             invocations)
-          "medium runs the full gated pipeline, no :easy-build")))
-  (testing "hard → also runs the gated 3-7 loop (differs only in model tier)"
-    (let [{:keys [invocations]}
-          (simulate-phase-loop {:decomposition single-subsystem-decomposition
-                                :difficulty-fn (fn [_sub _attempt] :hard)})]
-      (is (not-any? (fn [[p _ _]] (= p :easy-build)) invocations))
-      (is (some (fn [[p _ _]] (= p 7)) invocations)))))
-
 (deftest phase-loop-two-subsystem-test
-  ;; Two subsystems run phases 1-7 twice, in dependency order, with the slug
-  ;; on every cycle invocation. Gate counters must be FRESH per subsystem:
-  ;; each subsystem survives 3 consecutive gate-2 major-fails independently.
-  (testing "two-subsystem cycles with fresh gate counters"
+  ;; Two subsystems each run plan → plan-validate → build, in dependency order,
+  ;; with the slug on every cycle invocation. Plan-retry counters must be FRESH
+  ;; per subsystem: each survives 3 consecutive phase-2 major-fails independently.
+  (testing "two-subsystem cycles with fresh plan-retry counters"
     (let [{:keys [result invocations transcripts reasoning]}
           (simulate-phase-loop
            {:decomposition two-subsystem-decomposition
-            ;; Gate 2 major-fails on attempts 1-3 and passes on attempt 4 —
-            ;; in BOTH subsystems. With shared counters the second subsystem
+            ;; Phase 2 major-fails on attempts 1-3 and passes on attempt 4 —
+            ;; in BOTH subsystems. With a shared counter the second subsystem
             ;; would exceed the cap.
             :verdict-fn (fn [phase-id _subsystem attempt]
                           (if (= 2 phase-id)
                             (if (<= attempt 3) :major-fail :pass)
                             (passing-verdicts phase-id _subsystem attempt)))})
-          cycle-invs (filterv (fn [[p _ _]] (number? p)) invocations)
+          cycle-invs (filterv (fn [[_ s _]] (some? s)) invocations)
           alpha-invs (filterv (fn [[_ s _]] (= "alpha" s)) invocations)
           beta-invs  (filterv (fn [[_ s _]] (= "beta" s)) invocations)]
       (is (= :pass (:status result)))
       (is (= [[0 nil 1] [:decompose nil 1]] (take 2 invocations)))
       (is (= [:full-spec-review nil 1] (last invocations)))
-      (testing "every phase 1-7 invocation carries a subsystem slug"
-        (is (every? (fn [[p s _]] (or (= 0 p) (contains? #{"alpha" "beta"} s)))
-                    cycle-invs)))
+      (testing "every cycle invocation carries a subsystem slug"
+        (is (every? (fn [[_ s _]] (contains? #{"alpha" "beta"} s)) cycle-invs)))
       (testing "alpha's whole cycle runs before beta starts"
         (let [subsystem-order (mapv second (remove (fn [[_ s _]] (nil? s)) invocations))]
           (is (= ["alpha" "beta"] (vec (distinct subsystem-order))))
           (is (apply <= (map {"alpha" 0 "beta" 1} subsystem-order))
               "no alpha invocation after the first beta invocation")))
-      (testing "gate-2 retries happen independently in each subsystem"
+      (testing "plan retries happen independently in each subsystem"
         (is (= [[1 "alpha" 1] [2 "alpha" 1] [1 "alpha" 2] [2 "alpha" 2]
                 [1 "alpha" 3] [2 "alpha" 3] [1 "alpha" 4] [2 "alpha" 4]
-                [3 "alpha" 1] [4 "alpha" 1] [5 "alpha" 1] [6 "alpha" 1] [7 "alpha" 1]]
+                [:build "alpha" 1]]
                alpha-invs))
         (is (= [[1 "beta" 1] [2 "beta" 1] [1 "beta" 2] [2 "beta" 2]
                 [1 "beta" 3] [2 "beta" 3] [1 "beta" 4] [2 "beta" 4]
-                [3 "beta" 1] [4 "beta" 1] [5 "beta" 1] [6 "beta" 1] [7 "beta" 1]]
+                [:build "beta" 1]]
                beta-invs)
             "beta gets its own 3 retries — counters and attempts reset"))
       (testing "transcript filenames carry the subsystem segment before the phase suffix"
-        (is (some #(re-find #"-sim-ch-alpha-phase3\.jsonl$" %) transcripts))
-        (is (some #(re-find #"-sim-ch-beta-phase3\.jsonl$" %) transcripts))
+        (is (some #(re-find #"-sim-ch-alpha-phasebuild\.jsonl$" %) transcripts))
+        (is (some #(re-find #"-sim-ch-beta-phasebuild\.jsonl$" %) transcripts))
         (is (some #(re-find #"-sim-ch-alpha-phase2-attempt4\.jsonl$" %) transcripts))
         (is (some #(re-find #"-sim-ch-phasedecompose\.jsonl$" %) transcripts)
             "decompose stage is never subsystem-tagged")
         (is (some #(re-find #"-sim-ch-phasefull-spec-review\.jsonl$" %) transcripts)
             "full-spec review is never subsystem-tagged"))
       (testing "reasoning sentinels carry the subsystem tag"
-        (is (re-find #"=== PHASE 3 \[alpha\] attempt 1 — " reasoning))
+        (is (re-find #"=== PHASE BUILD \[alpha\] attempt 1 — " reasoning))
         (is (re-find #"=== PHASE 2 \[beta\] attempt 4 — " reasoning)))
-      (is (= 2 (:iterations result)) "one phase-3 invocation per subsystem"))))
-
-(deftest phase-loop-gate4-minor-fail-in-second-subsystem-test
-  ;; A gate-4 minor-fail inside subsystem 2 routes 3 → skip-4 → 5, exactly as
-  ;; in the historical single-module loop.
-  (testing "gate-4 minor-fail routes 3-then-skip-4 inside subsystem beta"
-    (let [{:keys [result invocations]}
-          (simulate-phase-loop
-           {:decomposition two-subsystem-decomposition
-            :verdict-fn (fn [phase-id subsystem attempt]
-                          (if (and (= 4 phase-id) (= "beta" subsystem) (= 1 attempt))
-                            :minor-fail
-                            (passing-verdicts phase-id subsystem attempt)))})
-          beta-invs (filterv (fn [[_ s _]] (= "beta" s)) invocations)]
-      (is (= :pass (:status result)))
-      (is (= [[1 "beta" 1] [2 "beta" 1] [3 "beta" 1] [4 "beta" 1]
-              [3 "beta" 2] [5 "beta" 1] [6 "beta" 1] [7 "beta" 1]]
-             beta-invs)
-          "after the minor-fail: phase 3 retry, then phase 4 skipped, straight to 5")
-      (is (= 1 (count (filterv (fn [[p s _]] (and (= 4 p) (= "beta" s))) invocations)))
-          "phase 4 runs exactly once for beta"))))
+      (is (= 2 (:iterations result)) "one build invocation per subsystem"))))
 
 (deftest phase-loop-full-spec-review-fix-test
   ;; A failed review triggers a fix session and a fresh re-review; a passing

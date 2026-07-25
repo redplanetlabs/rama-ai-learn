@@ -310,15 +310,6 @@
   (when-let [matches (seq (re-seq #"PHASE_VALIDATION:(minor-fail|major-fail|pass|fail)" output))]
     (keyword (second (last matches)))))
 
-(defn parse-phase-difficulty
-  "Extract the PHASE_DIFFICULTY classification from phase-2 output. Returns
-  :easy, :medium, :hard, or nil if absent. As with the verdict, take the LAST
-  occurrence (earlier ones appear in echoed doc instructions). A missing/invalid
-  classification is treated by the caller as :medium (gated, fast model)."
-  [output]
-  (when-let [matches (seq (re-seq #"PHASE_DIFFICULTY:(easy|medium|hard)" output))]
-    (keyword (second (last matches)))))
-
 (def score-keys [:alignment :test-alignment])
 
 (defn parse-skills-used
@@ -1088,7 +1079,6 @@
           (invoke-command! cmd project-root))
         combined (str out "\n" err)
         verdict (parse-phase-verdict combined)
-        difficulty (parse-phase-difficulty combined)
         transcript-path (save-transcript! project-root agent-name model reasoning
                                           challenge-name out phase-id attempt
                                           run-start-time subsystem)
@@ -1108,7 +1098,6 @@
      :timed-out? (boolean timed-out?)
      :duration-s duration-s
      :verdict verdict
-     :difficulty difficulty
      :transcript-path transcript-path
      :token-usage token-usage
      :cost cost
@@ -1133,10 +1122,10 @@
      :skill-refs-used all-skill-refs}))
 
 (defn phase3-iterations
-  "Total phase-3 invocations (impl attempts) across a run's phase results,
-  summed across all subsystems. Minimum 1."
+  "Total build invocations (implementation attempts) across a run's phase
+  results, summed across all subsystems. Minimum 1."
   [results]
-  (max 1 (count (filter #(= 3 (:phase-id %)) results))))
+  (max 1 (count (filter #(= :build (:phase-id %)) results))))
 
 (defn read-decomposition
   "Read implementations/<challenge>/DECOMPOSITION.json written by the
@@ -1191,50 +1180,27 @@
               :else entries)))))))
 
 (defn run-subsystem-phases!
-  "Drive phases 1→7 for one subsystem. `subsystem` is nil on single-subsystem
-  runs — invocations and artifacts are then identical to a run without
-  decomposition. Gate retry counters and skip flags are FRESH per call.
-  Returns {:status :pass|:fail|:timeout, :phase-results [...],
-  :failure-reason str?, :transcript-path str}.
+  "Drive one subsystem: plan → plan-validate → build. `subsystem` is nil on
+  single-subsystem runs. Returns {:status :pass|:fail|:timeout,
+  :phase-results [...], :failure-reason str?, :transcript-path str}.
 
-  Phase routing:
-  - 1 → 2
-  - 2 pass|minor-fail → 3, 2 major-fail → 1   (count toward gate 2's retry cap)
-  - 3 → 4 (unless skip-4 flag set, then 3 → 5)
-  - 4 pass → 5
-  - 4 minor-fail → 3 (set skip-4 to true; next time through, skip phase 4)
-  - 4 major-fail → 3 (don't set skip-4; phase 4 re-runs)
-  - 5 → 6
-  - 6 pass → 7
-  - 6 minor-fail → 7 (phase 7 absorbs the fix during its iterate loop;
-                      no fresh-context re-invocation of phase 5)
-  - 6 major-fail → 5 (full re-write needed; phase 6 re-runs after)
-  - 7 → done (verdict drives :status)
-
-  validation-retry-cap: max consecutive validation FAILs per gate (2, 4, 6).
-  Resets to 0 on PASS at that gate. Both minor-fail and major-fail count.
+  Pipeline:
+  - Phase 1 (plan) and Phase 2 (plan-validation) run on the SLOW tier.
+  - Phase 2 pass|minor-fail → build. major-fail → back to Phase 1 (capped by
+    validation-retry-cap consecutive major-fails).
+  - build (one session: implement → validate → test → iterate to green) runs
+    on the FAST tier and drives the subsystem's status. It subsumes the old
+    separate implement/validate/test/finish phases.
 
   An overall wall-clock budget (*overall-timeout-s*) caps the entire run.
   Checked at every loop iteration; per-call subprocess timeouts are clamped
   to the remaining budget."
   [agent-fns challenge-name subsystem project-root agent-name fast-tier slow-tier
    run-start-time run-start-millis]
-  ;; Phases 1 and 2 (plan + plan-validation) always run on the slow tier. Phase
-  ;; 2 classifies the subproblem easy|medium|hard (PHASE_DIFFICULTY). The
-  ;; post-validation work then runs as: a single collapsed :easy-build session on the
-  ;; fast tier (easy), the gated 3→7 loop on the fast tier (medium), or the
-  ;; gated 3→7 loop on the slow tier (hard).
-  (let [phase-tier (fn [phase-id difficulty]
-                     (cond
-                       (#{1 2} phase-id) slow-tier
-                       (= :hard difficulty) slow-tier
-                       :else fast-tier))]
-   (loop [phase-id 1
-          attempts {1 1, 2 1, 3 1, 4 1, 5 1, 6 1, 7 1, :easy-build 1}
-          skip-flags {4 false}
-          validation-fail-counts {2 0, 4 0, 6 0}
-          difficulty nil
-          results []]
+  (loop [phase-id 1
+         attempts {1 1, 2 1, :build 1}
+         plan-major-fails 0
+         results []]
     (cond
       ;; Overall budget exhausted — abort.
       (<= (time-remaining-s run-start-millis) 0)
@@ -1244,13 +1210,9 @@
                                *overall-timeout-s* (phase-id-str phase-id))
        :transcript-path (:transcript-path (last results))}
 
-      ;; One-shot skip for phase 4 (after a minor-fail on the prior round).
-      (and (= phase-id 4) (get skip-flags 4))
-      (recur 5 attempts (assoc skip-flags 4 false) validation-fail-counts difficulty results)
-
       :else
       (let [attempt   (get attempts phase-id 1)
-            [pm pr]   (phase-tier phase-id difficulty)
+            [pm pr]   (if (= :build phase-id) fast-tier slow-tier)
             r         (run-phase! agent-fns challenge-name phase-id attempt subsystem
                                   project-root agent-name pm pr
                                   run-start-time run-start-millis)
@@ -1269,38 +1231,26 @@
            :failure-reason (format "Phase %s (attempt %d) exited %d." (phase-id-str phase-id) attempt (:exit r))
            :transcript-path (:transcript-path r)}
 
-          ;; Phase 2: three-way verdict.
-          ;; pass       → phase 3
-          ;; minor-fail → phase 3 (validator fixes plan directly, no re-validation)
-          ;; major-fail → phase 1 (architecture needs rethinking)
+          ;; Phase 1 (plan): no verdict, advance to plan-validation.
+          (= phase-id 1)
+          (recur 2 attempts' plan-major-fails results')
+
+          ;; Phase 2 (plan-validation): pass|minor-fail → build; major-fail →
+          ;; back to Phase 1 (capped).
           (= phase-id 2)
           (cond
             (or (= :pass (:verdict r)) (= :minor-fail (:verdict r)))
-            ;; Read phase 2's easy|medium|hard classification (default :medium
-            ;; when absent/invalid). easy → one collapsed :easy-build session on the
-            ;; fast tier; medium/hard → the gated 3→7 loop (fast/slow tier).
-            (let [diff (or (:difficulty r) :medium)
-                  next-phase (if (= :easy diff) :easy-build 3)]
-              (when *verbose*
-                (println (format "  Phase 2 classified this subsystem: %s%s"
-                                 (name diff)
-                                 (if (= :easy diff) " → collapsed build session" ""))))
-              (recur next-phase attempts' skip-flags
-                     (assoc validation-fail-counts 2 0)
-                     diff
-                     results'))
+            (recur :build attempts' plan-major-fails results')
 
             (= :major-fail (:verdict r))
-            (let [prior-fails (get validation-fail-counts 2 0)
-                  vfc' (assoc validation-fail-counts 2 (inc prior-fails))]
-              (if (< prior-fails validation-retry-cap)
-                (do (save-attempt! project-root challenge-name)
-                    (recur 1 attempts' skip-flags vfc' nil results'))
-                {:status :fail
-                 :phase-results results'
-                 :failure-reason (format "Phase 2 failed validation %d times consecutively."
-                                         (inc prior-fails))
-                 :transcript-path (:transcript-path r)}))
+            (if (< plan-major-fails validation-retry-cap)
+              (do (save-attempt! project-root challenge-name)
+                  (recur 1 attempts' (inc plan-major-fails) results'))
+              {:status :fail
+               :phase-results results'
+               :failure-reason (format "Phase 2 failed validation %d times consecutively."
+                                       (inc plan-major-fails))
+               :transcript-path (:transcript-path r)})
 
             :else
             {:status :fail
@@ -1308,9 +1258,9 @@
              :failure-reason "Phase 2 did not emit PHASE_VALIDATION verdict."
              :transcript-path (:transcript-path r)})
 
-          ;; :easy-build (collapsed easy path): implement + test + iterate to green in
-          ;; one session. Binary verdict, terminal like phase 7.
-          (= phase-id :easy-build)
+          ;; build: implement + validate + test + iterate to green in one
+          ;; session. Binary verdict, terminal.
+          (= phase-id :build)
           (cond
             (= :pass (:verdict r))
             {:status :pass
@@ -1320,89 +1270,21 @@
             (= :fail (:verdict r))
             {:status :fail
              :phase-results results'
-             :failure-reason "Easy-build (collapsed path) emitted FAIL — agent could not get tests passing."
+             :failure-reason "Build emitted FAIL — agent could not get tests passing."
              :transcript-path (:transcript-path r)}
 
             :else
             {:status :fail
              :phase-results results'
-             :failure-reason (format "Easy-build did not emit a valid PHASE_VALIDATION verdict (got %s)."
+             :failure-reason (format "Build did not emit a valid PHASE_VALIDATION verdict (got %s)."
                                      (:verdict r))
              :transcript-path (:transcript-path r)})
 
-          ;; Phases 4 and 6: three-way verdict (pass/minor-fail/major-fail).
-          ;;
-          ;; Phase 4 routing:
-          ;;   pass       → phase 5
-          ;;   minor-fail → phase 3, skip phase 4 on next round (fix is too small to re-validate)
-          ;;   major-fail → phase 3, re-run phase 4 (architecture changed)
-          ;;
-          ;; Phase 6 routing:
-          ;;   pass       → phase 7
-          ;;   minor-fail → phase 7 (phase 7 absorbs the test fix during its iterate loop;
-          ;;                          no fresh-context re-invocation of phase 5 is paid)
-          ;;   major-fail → phase 5, re-run phase 6 (test suite needs restructuring)
-          (#{4 6} phase-id)
-          (cond
-            (= :pass (:verdict r))
-            (recur (inc phase-id) attempts' skip-flags
-                   (assoc validation-fail-counts phase-id 0)
-                   difficulty
-                   results')
-
-            (or (= :minor-fail (:verdict r)) (= :major-fail (:verdict r)))
-            (let [prior-fails (get validation-fail-counts phase-id 0)
-                  vfc' (assoc validation-fail-counts phase-id (inc prior-fails))
-                  next-phase (cond
-                               (and (= phase-id 6) (= :minor-fail (:verdict r))) 7
-                               (= phase-id 4) 3
-                               (= phase-id 6) 5)
-                  skip' (if (and (= phase-id 4) (= :minor-fail (:verdict r)))
-                          (assoc skip-flags 4 true)
-                          skip-flags)]
-              (if (< prior-fails validation-retry-cap)
-                (do (save-attempt! project-root challenge-name)
-                    (recur next-phase attempts' skip' vfc' difficulty results'))
-                {:status :fail
-                 :phase-results results'
-                 :failure-reason (format "Phase %d failed validation %d times consecutively."
-                                         phase-id (inc prior-fails))
-                 :transcript-path (:transcript-path r)}))
-
-            :else
-            {:status :fail
-             :phase-results results'
-             :failure-reason (format "Phase %d did not emit a valid PHASE_VALIDATION verdict (got %s)."
-                                     phase-id (:verdict r))
-             :transcript-path (:transcript-path r)})
-
-          ;; Phase 7 (finish): binary verdict; loop ends with this status.
-          ;; The agent is responsible for getting the test suite passing inside
-          ;; its own session — no post-phase verification by the runner.
-          (= phase-id 7)
-          (cond
-            (= :pass (:verdict r))
-            {:status :pass
-             :phase-results results'
-             :transcript-path (:transcript-path r)}
-
-            (= :fail (:verdict r))
-            {:status :fail
-             :phase-results results'
-             :failure-reason "Phase 7 (finish) emitted FAIL — agent could not get tests passing."
-             :transcript-path (:transcript-path r)}
-
-            :else
-            {:status :fail
-             :phase-results results'
-             :failure-reason (format "Phase 7 did not emit a valid PHASE_VALIDATION verdict (got %s)."
-                                     (:verdict r))
-             :transcript-path (:transcript-path r)})
-
-          ;; Non-validation phase: advance.
           :else
-          (recur (inc phase-id) attempts' skip-flags
-                 validation-fail-counts difficulty results')))))))
+          {:status :fail
+           :phase-results results'
+           :failure-reason (format "Unexpected phase %s in subsystem loop." (phase-id-str phase-id))
+           :transcript-path (:transcript-path r)})))))
 
 (def full-spec-review-cap
   "Max number of review→fix rounds for the full-spec-review stage. The review
