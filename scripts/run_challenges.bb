@@ -519,7 +519,7 @@
 (def ^:dynamic *overall-timeout-s*
   "Hard cap on total wall-clock for one challenge run (seconds).
   Includes all phase invocations, retries, lint, and test runs."
-  (* 6 3600))
+  (* 8 3600))
 
 (defn time-remaining-s
   "Seconds left in the overall challenge run budget. Never negative."
