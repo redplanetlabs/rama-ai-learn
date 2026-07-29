@@ -24,6 +24,7 @@ echo "Starting container '$CONTAINER'..."
 docker run -d \
   --name "$CONTAINER" \
   -e CLAUDE_CODE_OAUTH_TOKEN="$CLAUDE_CODE_OAUTH_TOKEN" \
+  -e CLAUDE_CODE_MAX_OUTPUT_TOKENS="${CLAUDE_CODE_MAX_OUTPUT_TOKENS:-64000}" \
   -v rama-m2:/root/.m2 \
   -v rama-gitlibs:/root/.gitlibs \
   rama-challenges sleep infinity

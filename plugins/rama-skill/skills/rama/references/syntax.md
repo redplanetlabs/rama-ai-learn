@@ -116,7 +116,7 @@ dynamic-opt   = '(set-launch-module-dynamic-option!' 'setup' option-string value
 | Depot (hash) | `(declare-depot setup *d (hash-by :k))` |
 | Depot (internal, no client appends) | `(declare-depot setup *d :disallow)` |
 | Depot (global, single partition) | `(declare-depot setup *d :random {:global? true})` |
-| Depot (custom partitioner) | `(declare-depot setup *d (defdepotpartitioner ...))` |
+| Depot (custom partitioner) | `(declare-depot setup *d custom-partitioner-var)` |
 | Tick depot | `(declare-tick-depot setup *tick 1000)` |
 | PState | `(declare-pstate topo $$p {String Long})` |
 | PState (value schema) | `(declare-pstate topo $$p (value-schema Long))` |
@@ -201,10 +201,12 @@ Nil-safe counter increment: `(local-transform> [(keypath *k) (nil->val 0) (term 
 ### Custom depot partitioner
 
 ```clojure
-(declare-depot setup *d
-  (defdepotpartitioner [*data *num-partitions]
-    (mod (hash *data) *num-partitions :> *idx)
-    (:> *idx)))
+(defdepotpartitioner my-depot-partitioning
+  [data num-partitions]
+  (mod (nth data 1) num-partitions))
+
+;; in module
+(declare-depot setup *d my-depot-partitioning)
 ```
 
 ---

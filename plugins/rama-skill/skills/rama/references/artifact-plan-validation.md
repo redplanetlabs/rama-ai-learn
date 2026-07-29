@@ -15,7 +15,7 @@ Read `PLAN.md` first, then fill in each item below. Extract the relevant data fr
 ## PState schemas
 - Any Object type? <yes/no — if yes, FAIL>
 - Uniform record-like values (all instances have same fields) use fixed-keys-schema? <yes/no – if no, FAIL>
-- If different instances at the same PState position have different fields, the schema MUST use definterface + defrecord. No exceptions. IPersistentMap, Object, fixed-keys-schema with optional/nil fields, and "justified deviation" are all FAIL. <yes/no – if no, FAIL>
+- If different instances at the same PState position have different fields, the schema MUST use definterface + defrecord. Representing that variation with IPersistentMap, Object, a fixed-keys-schema of optional/nil fields, or a "justified deviation" is a FAIL. (A nullable field on instances that otherwise share the same shape is not this case — that is fine.) <yes/no – if no, FAIL>
 - Inner collections that can exceed 100 elements subindexed? A collection needs subindexing if ANY instance can grow to have more than 100 elements (e.g., a popular entity). For each non-subindexed inner collection, name the specific code or protocol rule that enforces the size limit. If no enforcement mechanism exists, it is not bounded — subindex it. "Bounded by domain dynamics" or "typically small" without an enforcement mechanism does not count. <yes/no - if no, FAIL>
 
 ## Partitioning

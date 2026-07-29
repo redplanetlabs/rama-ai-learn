@@ -111,7 +111,7 @@ A `<<batch` block does not have to emit from a fragment var. It can run code tha
 
 Because `<<batch` is a global barrier, Batch 2 sees the results of Batch 1 across all tasks.
 
-**Tick depots for timely background work.** When subscribed depots have no new data, the next microbatch is delayed up to a minute by default (see "Behavior when subscribed depots are empty"). If the background work needs to run on a regular cadence regardless of whether new events arrive, subscribe the topology to a **tick depot** (`declare-tick-depot`) that fires periodically. Emit from the tick fragment var (`(%tick)`) without binding any output — this forces the microbatch to run on every tick even when `*events` has no new data. Without a tick depot, the background `<<batch` only runs when new events arrive on other subscribed depots.
+**Tick depots for timely background work.** When subscribed depots have no new data, the next microbatch is delayed up to a minute by default (see "Behavior when subscribed depots are empty"). If the background work needs to run on a regular cadence regardless of whether new events arrive, subscribe the topology to a **tick depot** (`declare-tick-depot`) that fires periodically. Emit from the tick fragment var (`(%tick)`) without binding any output — this forces the microbatch to run on every tick even when `*events` has no new data. Without a tick depot, the background `<<batch` only runs when new events arrive on other subscribed depots or the sleep interval for microbatching has passed (one minute by default).
 
 ## Transaction scope
 

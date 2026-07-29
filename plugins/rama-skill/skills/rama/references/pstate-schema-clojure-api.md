@@ -33,6 +33,8 @@ Map literal `{K V}` is shorthand for `(map-schema K V)`.
 
 ## Subindex Options
 
+Both of these turn subindexing on. The latter also sets an option on it.
+
 ```clojure
 {:subindex? true}                                     ;; size tracking on (default)
 {:subindex-options {:track-size? false}}               ;; disable size tracking

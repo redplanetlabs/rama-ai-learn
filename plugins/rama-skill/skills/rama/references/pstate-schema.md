@@ -134,8 +134,9 @@ count. Disable for write-heavy paths that never query size:
   {String (set-schema Long {:subindex-options {:track-size? false}})})
 ```
 
-With size tracking on, `(view count)` is O(1).
-Without it, O(n).
+`{:subindex-options {:track-size? true}}` is equivalent to `{:subindex? true}`
+
+With size tracking on, `(view count)` is O(1). Without it, O(n).
 
 ### Sorted Range Queries
 
@@ -184,7 +185,8 @@ only need to include the keys being set.
 - `:global?` — single-partition state on task 0 (counts, top-N)
 - `:initial-value` — only for class-reference top-level schemas
 - `:private?` — topology-internal only; throws on foreign access
-- `:key-partitioner` — `(fn [num-partitions key] partition-idx)`
+- `:key-partitioner` — `(fn [num-partitions key] partition-idx)`.
+  - default to hash partitioning equivalent to `|hash`
 
 ## Schema Validation Options
 
