@@ -2,6 +2,8 @@
 
 A query topology is a distributed, on-demand, read-only function. It accepts input arguments, performs computation across tasks, and returns a single result. Query topologies are batch blocks — read `batch.md` before writing any query topology. You must understand batch block semantics (pre-agg/agg/post-agg phases, how aggregators work, joins) to write correct query topologies.
 
+**Read-only applies to PStates, not TaskGlobals.** A query topology may synchronously mutate a TaskGlobal (see `task-globals.md`) — a write path for in-memory state that needs no durability, applied and visible by the time the query returns.
+
 ## How query topologies work
 
 A query topology is a batch block that:
