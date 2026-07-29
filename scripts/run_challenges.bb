@@ -521,6 +521,11 @@
   Includes all phase invocations, retries, lint, and test runs."
   (* 8 3600))
 
+(def ^:dynamic *phase-retry-cap*
+  "Max times a single phase invocation is re-run after a transient server-side
+  error (overload, 5xx, rate limit) before giving up. Fresh session each time."
+  3)
+
 (defn time-remaining-s
   "Seconds left in the overall challenge run budget. Never negative."
   [run-start-millis]
@@ -1056,9 +1061,23 @@
            (format "\n=== PHASE %s%s attempt %d — %s ===\n\n" phase-label sub-label attempt ts)
            :append true))))
 
+(def ^:private transient-error-re
+  ;; Server-side / infra errors worth retrying. Deliberately excludes the
+  ;; output-token-maximum error (a config problem, not transient) — that one
+  ;; contains "api error" but retrying it just re-hits the same cap.
+  #"(?i)overloaded|overloaded_error|\b529\b|\b50[0234]\b|internal server error|service unavailable|bad gateway|gateway timeout|\b429\b|rate.?limit|error_during_execution|connection reset|econnreset|socket hang ?up")
+
+(defn transient-server-error?
+  "True when agent output shows a retryable server-side error (overload, 5xx,
+  rate limit, dropped connection) rather than a legitimate phase failure."
+  [combined-output]
+  (boolean (re-find transient-error-re (or combined-output ""))))
+
 (defn run-phase!
   "Invoke one phase of a challenge. Clamps the per-call timeout to whatever's
-  left in the overall run budget. `subsystem` is nil on single-subsystem runs;
+  left in the overall run budget. A transient server-side error re-runs the
+  invocation (fresh session) up to *phase-retry-cap* times with backoff before
+  the result is returned. `subsystem` is nil on single-subsystem runs;
   on multi-subsystem runs it is the slug of the subsystem being built and is
   threaded into the /challenge-phase invocation, the reasoning sentinel, and
   the transcript filename. Returns a result map with everything the caller
@@ -1074,9 +1093,26 @@
         _ (when *verbose*
             (println (format "  Phase %s (attempt %d) starting (budget remaining: %ds, this-call cap: %ds)..."
                              phase-label attempt remaining effective-timeout)))
+        ;; Re-run the invocation on a transient server-side error, with backoff,
+        ;; until it succeeds, the retry cap is hit, or the budget runs out.
         {:keys [exit out err duration-s timed-out?]}
-        (binding [*outer-timeout-s* effective-timeout]
-          (invoke-command! cmd project-root))
+        (loop [tries 0]
+          (let [remaining (long (time-remaining-s run-start-millis))
+                eff (min *outer-timeout-s* (max 1 remaining))
+                r (binding [*outer-timeout-s* eff]
+                    (invoke-command! cmd project-root))
+                combined (str (:out r) "\n" (:err r))]
+            (if (and (transient-server-error? combined)
+                     (not (:timed-out? r))
+                     (< tries *phase-retry-cap*)
+                     (> (time-remaining-s run-start-millis) 0))
+              (let [backoff (min 60 (* 15 (inc tries)))]
+                (when *verbose*
+                  (println (format "  Phase %s: transient server error — retry %d/%d in %ds"
+                                   phase-label (inc tries) *phase-retry-cap* backoff)))
+                (Thread/sleep (* backoff 1000))
+                (recur (inc tries)))
+              r)))
         combined (str out "\n" err)
         verdict (parse-phase-verdict combined)
         transcript-path (save-transcript! project-root agent-name model reasoning
