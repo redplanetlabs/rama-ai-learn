@@ -18,7 +18,7 @@ Time ordering has millisecond granularity: two UUID7s generated within the same 
 
 This time ordering holds **in subindexed structures**: subindex sorting is lexicographic on the serialized key, and a UUID's serialized form preserves its bit order, so UUID7 keys in subindexed maps/sets iterate in chronological order. Range queries and cursor pagination over UUID7-keyed subindexed structures are therefore time-ordered.
 
-The on-disk (subindex) ordering of UUID keys is identical to their in-memory ordering (`java.util.UUID` `compareTo`). In-memory structures sorted by UUID comparison — sorted collections, binary searches — agree with subindexed iteration order, so no special comparator is needed when mixing the two.
+UUID7 keys sort the same way on disk (subindex ordering, lexicographic on the serialized bytes) as they do in memory (`java.util.UUID` `compareTo`). In-memory structures sorted by UUID7 comparison — sorted collections, binary searches — agree with subindexed iteration order, so no special comparator is needed when mixing the two.
 
 **Do NOT use `java.util.UUID/randomUUID`.** This generates UUID4. Always use `ops/random-uuid7` instead — it works in both client code and dataflow  (topologies, `deframafn`, `deframaop`).
 

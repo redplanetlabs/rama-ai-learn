@@ -35,7 +35,7 @@ simulates a full cluster in a single process with no mocks required.
 
 ## Axioms
 
-1. **IPC = real cluster** — no capability or semantic differences; only replication factor (always 1) and serialization scope differ
+1. **IPC = real cluster** — no capability or semantic differences; only replication factor (always 1) and serialization scope differ. Performance is NOT equivalent: IPC timings are not a proxy for production latency or throughput. Only order-of-magnitude results mean anything.
 2. **ACK blocks downstream** — acked depot appends block until all downstream processing on colocated stream topologies complete; assertions are immediate
 3. **ACK does not cross module boundaries** — mirror depot stream topologies in other modules are not waited on; polling required
 4. **Microbatch count is cumulative** — `wait-for-microbatch-processed-count` tracks total records ever processed, not since last call

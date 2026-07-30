@@ -35,7 +35,7 @@ Vectors and sets cannot be top-level. Use `java.util.ArrayList` or
 
 **First-class schemas** (top-level map and fixed-keys-schema) are backed by RocksDB — each key/field is individually addressable on disk. Reads and writes to individual keys are efficient O(1) operations without loading the entire structure.
 
-The root of a first-class schema is NOT a writable location: a root-level `(termval ...)` over a top-level map or fixed-keys-schema fails at runtime (it would replace a RocksDB-backed structure with a plain value). Write individual keys/fields instead — use multi-path for several fields at once. Root-level `termval` is valid only when the top-level schema is a Class reference.
+The PState root is NOT a writable location: a root-level `(termval ...)` over a top-level map or fixed-keys-schema fails at runtime (it would replace a RocksDB-backed structure with a plain value). Write individual keys/fields instead. Root-level `termval` is valid only when the top-level schema is a Class reference. This constrains the root only — nested map and fixed-keys-schema values are ordinary write targets (see `paths.md`).
 
 **Class-reference schemas** (top-level `Long`, `String`, `Object`, etc.) are backed by a single value on disk. The entire value is read/written as one unit. These do not support subindexing.
 
@@ -187,6 +187,9 @@ only need to include the keys being set.
 - `:private?` — topology-internal only; throws on foreign access
 - `:key-partitioner` — `(fn [num-partitions key] partition-idx)`.
   - default to hash partitioning equivalent to `|hash`
+
+Class-typed positions match **exactly**, with no widening: `Integer` is not
+`Long`.
 
 ## Schema Validation Options
 

@@ -550,6 +550,63 @@
         (finally
           (babashka.fs/delete-tree tmp-root))))))
 
+(deftest transient-server-error-test
+  ;; Regression guard for a bug that quadrupled every run: the detector used to
+  ;; regex the agent's raw stdout, which carries a `rate_limit_info` block on
+  ;; every Claude Code invocation and routinely carries bare numbers like 500 in
+  ;; agent prose. Every phase therefore looked like a server error and was
+  ;; re-run *phase-retry-cap* extra times.
+  (testing "a successful run is never transient, however its stdout reads"
+    (let [success (str "{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false,"
+                       "\"rate_limit_info\":{\"status\":\"allowed\",\"rateLimitType\":\"five_hour\"},"
+                       "\"result\":\"ran in 500 ms over 502 assertions; see http 429 notes\"}")]
+      (is (false? (transient-server-error? success "")))))
+  (testing "a tool_result error inside the stream is a phase outcome, not infra"
+    (let [tool-err (str "{\"type\":\"user\",\"message\":{\"content\":"
+                        "[{\"type\":\"tool_result\",\"is_error\":true,"
+                        "\"content\":\"bash: connection reset by peer\"}]}}")]
+      (is (false? (transient-server-error? tool-err "")))))
+  (testing "the run's own error result IS transient"
+    (is (true? (transient-server-error?
+                (str "{\"type\":\"result\",\"subtype\":\"error_during_execution\","
+                     "\"is_error\":true,\"result\":\"API Error: 529 Overloaded\"}")
+                ""))))
+  (testing "stderr is scanned in full"
+    (is (true? (transient-server-error? "" "socket hang up")))
+    (is (true? (transient-server-error? "" "Error: 503 Service Unavailable"))))
+  (testing "non-JSON stdout is scanned in full (CLI died before structured output)"
+    (is (true? (transient-server-error? "upstream connect error: bad gateway" ""))))
+  (testing "the output-token-maximum error stays non-transient"
+    (is (false? (transient-server-error?
+                 (str "{\"type\":\"result\",\"subtype\":\"error_max_tokens\",\"is_error\":true,"
+                      "\"result\":\"API Error: max output tokens exceeded\"}")
+                 "")))))
+
+(deftest save-transcript-retry-test
+  ;; A transient-error re-invocation is the SAME attempt run again, so it gets a
+  ;; `-retry{R}` segment rather than sharing (and overwriting) the attempt's
+  ;; filename. Before this, only the last invocation's transcript survived.
+  (let [tmp-root (str (babashka.fs/create-temp-dir))
+        project-dir (str (babashka.fs/path tmp-root "project"))
+        run-start (java.time.LocalDateTime/now)]
+    (babashka.fs/create-dirs project-dir)
+    (try
+      (testing "retry 0 is unsuffixed"
+        (let [path (save-transcript! project-dir "claude" nil nil "ch" "x" 3 1 run-start nil 0)]
+          (is (re-find #"-ch-phase3\.jsonl$" path))))
+      (testing "retries get their own files, distinct from attempt 1's"
+        (let [p0 (save-transcript! project-dir "claude" nil nil "ch" "a" 3 1 run-start nil 0)
+              p1 (save-transcript! project-dir "claude" nil nil "ch" "b" 3 1 run-start nil 1)]
+          (is (re-find #"-ch-phase3-retry1\.jsonl$" p1))
+          (is (not= p0 p1))
+          (is (= "a" (slurp p0)) "the earlier invocation's transcript survives")
+          (is (= "b" (slurp p1)))))
+      (testing "attempt and retry compose"
+        (let [path (save-transcript! project-dir "claude" nil nil "ch" "x" 3 2 run-start "alpha" 2)]
+          (is (re-find #"-ch-alpha-phase3-attempt2-retry2\.jsonl$" path))))
+      (finally
+        (babashka.fs/delete-tree tmp-root)))))
+
 (deftest parse-phase-verdict-test
   (testing "returns nil when no verdict present"
     (is (nil? (parse-phase-verdict "just some text"))))

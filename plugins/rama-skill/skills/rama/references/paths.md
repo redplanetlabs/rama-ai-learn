@@ -611,15 +611,18 @@ Certain terminal operations skip the read on the data structure entirely, which 
 - `keypath` + `NONE>` = **delete only, no read**
 - `set-elem` + `NONE>` = **delete only, no read**
 
-But `keypath` + further navigation **does read** because it must load the value to navigate into it. This means `multi-path` into fields of a `fixed-keys-schema` triggers a read, even though each branch uses `termval`. When writing an entire record, prefer a single `termval` with the whole map over `multi-path` with per-field `termval`s:
+But `keypath` + further navigation **does read** because it must load the value to navigate into it. This means `multi-path` into fields of a `fixed-keys-schema` triggers a read, even though each branch uses `termval`.
+
+Choose on semantics, not cost. `termval` on a map **replaces** it — use it to completely replace what's at that position, needing no read. `multi-path` **updates, adds, or removes** individual keys, leaving the rest intact — use it to update several fields at once, especially with functions of the current value. `termval` is the cheaper write, but using it where you meant to update silently drops every key you didn't mention.
 
 ```clojure
-;; Causes a read — multi-path navigates into the loaded value
+;; Updates two fields, leaves the rest of the record intact. Causes a read —
+;; multi-path navigates into the loaded value.
 (local-transform> [(keypath *k1 *k2)
                    (multi-path [:field1 (termval *v1)] [:field2 (termval *v2)])]
                   $$pstate)
 
-;; No read — keypath + termval directly
+;; Replaces the whole record with a two-field map. No read.
 (local-transform> [(keypath *k1 *k2)
                    (termval {:field1 *v1 :field2 *v2})]
                   $$pstate)
