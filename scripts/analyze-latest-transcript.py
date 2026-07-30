@@ -62,14 +62,16 @@ DEFAULT_TRANSCRIPT = os.path.join(REPO_ROOT, 'latest-transcript.jsonl')
 LATEST_TRANSCRIPTS_DIR = os.path.join(REPO_ROOT, 'latest-transcripts')
 
 def _phase_stem(path, phase):
-    """The filename prefix before `-phase{phase}` (drops any -attempt suffix).
+    """The filename prefix before `-phase{phase}` (drops -attempt/-retry suffixes).
 
     Two files with different stems for the same phase belong to different
     subsystems (multi-subsystem runs tag filenames as
     ...-<challenge>-<subsystem>-phase3.jsonl). Returns None when the name
     doesn't match the expected shape."""
     name = os.path.basename(path)
-    m = re.match(rf'(.*)-phase{re.escape(str(phase))}(?:-attempt\d+)?\.jsonl$', name)
+    m = re.match(
+        rf'(.*)-phase{re.escape(str(phase))}(?:-attempt\d+)?(?:-retry\d+)?\.jsonl$',
+        name)
     return m.group(1) if m else None
 
 def _pick_latest_by_mtime(candidates, phase):
@@ -128,19 +130,24 @@ def resolve_transcript_path(phase=None, attempt=None, subsystem=None):
             # Multiple subsystems match this phase and no --subsystem given.
             return _pick_latest_by_mtime(candidates, phase)
         def attempt_of(path):
-            m = re.search(r'-attempt(\d+)\.jsonl$', path)
-            return int(m.group(1)) if m else 1
+            # (attempt, retry). A retry is a re-invocation of the SAME attempt
+            # after a transient server error, so the last retry of the highest
+            # attempt is the one whose result the runner actually used.
+            a = re.search(r'-attempt(\d+)', path)
+            r = re.search(r'-retry(\d+)\.jsonl$', path)
+            return (int(a.group(1)) if a else 1, int(r.group(1)) if r else 0)
         candidates.sort(key=attempt_of, reverse=True)
         return candidates[0]
 
-    # Specific attempt requested.
-    if attempt == 1:
-        # attempt 1 has no `-attempt` suffix. Match `*-phaseN.jsonl` exactly,
-        # not `*-phaseN-attempt2.jsonl`.
-        pattern = os.path.join(LATEST_TRANSCRIPTS_DIR, f'*-phase{phase}.jsonl')
-    else:
-        pattern = os.path.join(LATEST_TRANSCRIPTS_DIR, f'*-phase{phase}-attempt{attempt}.jsonl')
-    candidates = filter_subsystem(glob.glob(pattern))
+    # Specific attempt requested. Glob broadly, then filter with an anchored
+    # regex: attempt 1 carries no `-attempt` segment, so a glob alone can't
+    # tell `-phase1.jsonl` from `-phase1-attempt2.jsonl`. Any `-retry{R}`
+    # segment is accepted here and disambiguated below by mtime.
+    pattern = os.path.join(LATEST_TRANSCRIPTS_DIR, f'*-phase{phase}*.jsonl')
+    tail = r'(?:-retry\d+)?\.jsonl$' if attempt == 1 else rf'-attempt{attempt}(?:-retry\d+)?\.jsonl$'
+    want = re.compile(rf'-phase{re.escape(str(phase))}{tail}')
+    candidates = [c for c in filter_subsystem(glob.glob(pattern))
+                  if want.search(os.path.basename(c))]
     if not candidates:
         sub = f" --subsystem {subsystem}" if subsystem else ""
         sys.stderr.write(
@@ -679,7 +686,7 @@ def cmd_run_overview(lines, args):
         if first is None:
             continue
         name = os.path.basename(path)
-        m = re.search(r'-(phase(?:\d+|decompose|full-spec-review|full-spec-fix)(?:-attempt\d+)?)\.jsonl$', name)
+        m = re.search(r'-(phase(?:\d+|decompose|build|full-spec-review|full-spec-fix)(?:-attempt\d+)?(?:-retry\d+)?)\.jsonl$', name)
         if m:
             label = m.group(1)
             # Keyword stages read better without the `phase` prefix
@@ -694,15 +701,19 @@ def cmd_run_overview(lines, args):
         if stem is not None:
             stems.append(stem)
     # Multi-subsystem runs tag filenames between the challenge name and the
-    # phase suffix (...-<challenge>-<subsystem>-phase3.jsonl). The shortest
-    # stem is the untagged run prefix (phase 0/decompose/full-spec-review are
-    # never tagged); anything longer carries a subsystem tag — show it.
-    base = min(stems, key=len) if stems else None
+    # phase suffix (...-<challenge>-<subsystem>-phase3.jsonl). Compare on token
+    # counts rather than string prefixes: the reasoning tier also sits in the
+    # stem and varies per phase (`...-low-chat-app` vs `...-medium-chat-app`),
+    # so a plain startswith test misses every stem on the longer tier. The
+    # fewest-token stems are the untagged ones (phase 0 / decompose are never
+    # tagged); any extra trailing tokens are the subsystem slug.
+    ntok = min((len(s.split('-')) for s in stems), default=None)
     labeled = []
     for first, last, label, stem in rows:
-        if (base is not None and stem is not None and stem != base
-                and stem.startswith(base + '-')):
-            label = f'{label} [{stem[len(base) + 1:]}]'
+        if ntok is not None and stem is not None:
+            extra = stem.split('-')[ntok:]
+            if extra:
+                label = f'{label} [{"-".join(extra)}]'
         labeled.append((first, last, label))
     rows = labeled
     rows.sort()

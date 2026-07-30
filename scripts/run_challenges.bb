@@ -477,18 +477,26 @@
 
 (defn save-transcript!
   "Save JSONL agent output to ../transcripts relative to project-root.
-  Filename: {date}-{time}-{agent}[-{model}][-{reasoning}]-{challenge}[-{subsystem}]-phase{ID}[-attempt{K}].jsonl
+  Filename: {date}-{time}-{agent}[-{model}][-{reasoning}]-{challenge}[-{subsystem}]-phase{ID}[-attempt{K}][-retry{R}].jsonl
   The {subsystem} segment is present only on multi-subsystem runs (n > 1).
   {ID} is the phase number for numbered phases, or the stage name for keyword
   stages (decompose, full-spec-review, full-spec-fix).
+  {K} counts validation-driven retries (a phase re-run because a later phase
+  failed it); {R} counts transient-server-error re-invocations of the SAME
+  attempt. They are separate segments because they mean different things: {K}
+  is a decision the runner made about the work, {R} is infrastructure noise.
   All transcripts of one challenge run share the same {date}-{time} prefix
   (the run-start-time), so they can be grouped as a unit. Returns the path written."
   ([project-root agent-name model reasoning challenge-name content
     phase-id attempt run-start-time]
    (save-transcript! project-root agent-name model reasoning challenge-name
-                     content phase-id attempt run-start-time nil))
+                     content phase-id attempt run-start-time nil 0))
   ([project-root agent-name model reasoning challenge-name content
     phase-id attempt run-start-time subsystem]
+   (save-transcript! project-root agent-name model reasoning challenge-name
+                     content phase-id attempt run-start-time subsystem 0))
+  ([project-root agent-name model reasoning challenge-name content
+    phase-id attempt run-start-time subsystem retry]
    (let [t               (or run-start-time (java.time.LocalDateTime/now))
          date-str        (.format t (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd"))
          time-str        (.format t (java.time.format.DateTimeFormatter/ofPattern "HHmmss"))
@@ -498,9 +506,10 @@
                            model                 (format "%s-%s-%s-%s" date-str time-str agent-name model)
                            :else                 (format "%s-%s-%s" date-str time-str agent-name))
          sub-segment     (if subsystem (str "-" subsystem) "")
+         retry-segment   (if (pos? (or retry 0)) (format "-retry%d" retry) "")
          phase-suffix    (cond
-                           (and phase-id (> attempt 1)) (format "%s-phase%s-attempt%d" sub-segment (phase-id-str phase-id) attempt)
-                           phase-id                     (format "%s-phase%s" sub-segment (phase-id-str phase-id))
+                           (and phase-id (> attempt 1)) (format "%s-phase%s-attempt%d%s" sub-segment (phase-id-str phase-id) attempt retry-segment)
+                           phase-id                     (format "%s-phase%s%s" sub-segment (phase-id-str phase-id) retry-segment)
                            :else                        "")
          filename        (str base "-" challenge-name phase-suffix ".jsonl")
          path            (str (fs/path transcripts-dir filename))]
@@ -1050,28 +1059,76 @@
   ([project-root challenge-name phase-id attempt]
    (append-reasoning-sentinel! project-root challenge-name phase-id attempt nil))
   ([project-root challenge-name phase-id attempt subsystem]
+   (append-reasoning-sentinel! project-root challenge-name phase-id attempt subsystem 0))
+  ([project-root challenge-name phase-id attempt subsystem retry]
    (let [impl-dir (fs/path project-root "implementations" challenge-name)
          path     (fs/path impl-dir "REASONING.md")
          ts       (.format (java.time.LocalDateTime/now)
                            (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm:ss"))
          phase-label (str/upper-case (phase-id-str phase-id))
-         sub-label   (if subsystem (str " [" subsystem "]") "")]
+         sub-label   (if subsystem (str " [" subsystem "]") "")
+         ;; A transient-error re-invocation is a fresh session doing the SAME
+         ;; attempt over again, so it gets its own sentinel — otherwise the
+         ;; retried session finds the previous session's reasoning sitting under
+         ;; a sentinel that claims to be its own, and burns turns working out
+         ;; whether the phase already ran.
+         retry-label (if (pos? retry) (format " retry %d" retry) "")]
      (fs/create-dirs impl-dir)
      (spit (str path)
-           (format "\n=== PHASE %s%s attempt %d — %s ===\n\n" phase-label sub-label attempt ts)
+           (format "\n=== PHASE %s%s attempt %d%s — %s ===\n\n"
+                   phase-label sub-label attempt retry-label ts)
            :append true))))
 
 (def ^:private transient-error-re
-  ;; Server-side / infra errors worth retrying. Deliberately excludes the
-  ;; output-token-maximum error (a config problem, not transient) — that one
-  ;; contains "api error" but retrying it just re-hits the same cap.
-  #"(?i)overloaded|overloaded_error|\b529\b|\b50[0234]\b|internal server error|service unavailable|bad gateway|gateway timeout|\b429\b|rate.?limit|error_during_execution|connection reset|econnreset|socket hang ?up")
+  ;; Server-side / infra errors worth retrying. Applied ONLY to stderr and to
+  ;; the error-bearing fields of the agent's structured events (see
+  ;; `agent-error-text`) — never to raw stdout, which carries a `rate_limit_info`
+  ;; block on every single Claude Code run. Numeric status codes require a
+  ;; surrounding HTTP context for the same reason: a bare `500` in agent prose is
+  ;; far more often a timeout argument or a row count than a status code.
+  ;; Deliberately excludes the output-token-maximum error (a config problem,
+  ;; not transient) — that one contains "api error" but retrying it just
+  ;; re-hits the same cap.
+  #"(?i)overloaded|overloaded_error|internal server error|service unavailable|bad gateway|gateway timeout|too many requests|error_during_execution|connection reset|econnreset|socket hang ?up|rate.?limit\w*\s+(?:exceeded|error|reached|hit)|(?:status|code|http|error)\W{0,12}(?:429|50[0234]|529)\b|\b(?:429|50[0234]|529)\s+(?:error|status)")
+
+(defn agent-error-text
+  "The subset of an agent invocation's output worth scanning for transient
+  server errors: stderr in full, plus the error-bearing fields of structured
+  stdout events. Raw stdout is deliberately NOT included — every Claude Code run
+  emits a `rate_limit_info` block and agent prose routinely contains bare
+  numbers like 500, so a regex over the whole stream matches on every run and
+  turns the retry loop into an unconditional 4x re-run of every phase.
+  Non-JSON stdout lines ARE kept: a CLI that dies before it can emit structured
+  output prints plainly."
+  [out err]
+  (let [from-stdout
+        (keep (fn [line]
+                (let [parsed (try (json/parse-string line true)
+                                  (catch Exception _ ::unparsed))]
+                  (cond
+                    (= ::unparsed parsed) line
+                    ;; `is_error` here is top-level (the run's own result event).
+                    ;; Tool-level `is_error` lives nested under :message :content
+                    ;; and is invisible to this check by design — a failed Bash
+                    ;; call is a phase outcome, not an infrastructure failure.
+                    (and (map? parsed)
+                         (or (:is_error parsed)
+                             (and (= "result" (:type parsed))
+                                  (not= "success" (:subtype parsed)))))
+                    (str/join " " (filter string?
+                                          [(:subtype parsed) (:result parsed)
+                                           (:error parsed) (:message parsed)]))
+                    :else nil)))
+              (remove str/blank? (str/split-lines (or out ""))))]
+    (str/join "\n" (cons (or err "") from-stdout))))
 
 (defn transient-server-error?
-  "True when agent output shows a retryable server-side error (overload, 5xx,
-  rate limit, dropped connection) rather than a legitimate phase failure."
-  [combined-output]
-  (boolean (re-find transient-error-re (or combined-output ""))))
+  "True when an agent invocation shows a retryable server-side error (overload,
+  5xx, rate limit, dropped connection) rather than a legitimate phase failure.
+  Takes the invocation's stdout and stderr separately so stdout can be narrowed
+  to its error fields before matching."
+  [out err]
+  (boolean (re-find transient-error-re (agent-error-text out err))))
 
 (defn run-phase!
   "Invoke one phase of a challenge. Clamps the per-call timeout to whatever's
@@ -1084,7 +1141,6 @@
   needs to decide next steps and accumulate per-phase telemetry."
   [agent-fns challenge-name phase-id attempt subsystem
    project-root agent-name model reasoning run-start-time run-start-millis]
-  (append-reasoning-sentinel! project-root challenge-name phase-id attempt subsystem)
   (let [cmd ((:phase-cmd agent-fns) challenge-name phase-id project-root model reasoning subsystem)
         remaining (long (time-remaining-s run-start-millis))
         effective-timeout (min *outer-timeout-s* remaining)
@@ -1095,14 +1151,23 @@
                              phase-label attempt remaining effective-timeout)))
         ;; Re-run the invocation on a transient server-side error, with backoff,
         ;; until it succeeds, the retry cap is hit, or the budget runs out.
-        {:keys [exit out err duration-s timed-out?]}
+        ;; Every invocation gets its own sentinel and its own saved transcript:
+        ;; a discarded retry still consumed budget and still wrote to the
+        ;; implementation directory, so throwing its transcript away leaves the
+        ;; run's wall clock unexplainable after the fact.
+        {:keys [exit out err duration-s timed-out? retries transcript-path]}
         (loop [tries 0]
           (let [remaining (long (time-remaining-s run-start-millis))
                 eff (min *outer-timeout-s* (max 1 remaining))
+                _ (append-reasoning-sentinel! project-root challenge-name
+                                              phase-id attempt subsystem tries)
                 r (binding [*outer-timeout-s* eff]
                     (invoke-command! cmd project-root))
-                combined (str (:out r) "\n" (:err r))]
-            (if (and (transient-server-error? combined)
+                path (save-transcript! project-root agent-name model reasoning
+                                       challenge-name (:out r) phase-id attempt
+                                       run-start-time subsystem tries)
+                r (assoc r :retries tries :transcript-path path)]
+            (if (and (transient-server-error? (:out r) (:err r))
                      (not (:timed-out? r))
                      (< tries *phase-retry-cap*)
                      (> (time-remaining-s run-start-millis) 0))
@@ -1115,20 +1180,18 @@
               r)))
         combined (str out "\n" err)
         verdict (parse-phase-verdict combined)
-        transcript-path (save-transcript! project-root agent-name model reasoning
-                                          challenge-name out phase-id attempt
-                                          run-start-time subsystem)
         token-usage (parse-token-usage out)
         cost (compute-cost token-usage (model->pricing model))
         tool-uses (parse-tool-uses out)
         skills-used (parse-skills-used out)
         skill-refs-used (parse-skill-refs-used out)]
     (when *verbose*
-      (println (format "  Phase %s (attempt %d) finished: exit=%d duration=%ds verdict=%s"
-                       phase-label attempt exit duration-s
+      (println (format "  Phase %s (attempt %d) finished: exit=%d duration=%ds retries=%d verdict=%s"
+                       phase-label attempt exit duration-s retries
                        (if verdict (name verdict) "n/a"))))
     {:phase-id phase-id
      :attempt attempt
+     :retries retries
      :subsystem subsystem
      :exit exit
      :timed-out? (boolean timed-out?)
