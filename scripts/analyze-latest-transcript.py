@@ -61,6 +61,20 @@ REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DEFAULT_TRANSCRIPT = os.path.join(REPO_ROOT, 'latest-transcript.jsonl')
 LATEST_TRANSCRIPTS_DIR = os.path.join(REPO_ROOT, 'latest-transcripts')
 
+def hms(seconds):
+    """Format a duration as `1h02m03s` / `2m03s` / `43s`.
+
+    Bare second counts stop being readable past a couple of minutes, and phase
+    durations here run to hours."""
+    seconds = int(seconds)
+    h, rem = divmod(seconds, 3600)
+    m, s = divmod(rem, 60)
+    if h:
+        return f'{h}h{m:02d}m{s:02d}s'
+    if m:
+        return f'{m}m{s:02d}s'
+    return f'{s}s'
+
 def _phase_stem(path, phase):
     """The filename prefix before `-phase{phase}` (drops -attempt/-retry suffixes).
 
@@ -720,7 +734,7 @@ def cmd_run_overview(lines, args):
     def parse(ts):
         return datetime.fromisoformat(ts.replace('Z', '+00:00'))
     run_start = parse(rows[0][0])
-    print(f'{"phase":24s} {"start":>9s} {"end":>9s} {"dur":>7s} {"gap-before":>11s}')
+    print(f'{"phase":24s} {"start":>9s} {"end":>9s} {"dur":>9s} {"gap-before":>11s}')
     prev_end = None
     total_dur = 0
     for first, last, label in rows:
@@ -730,12 +744,12 @@ def cmd_run_overview(lines, args):
         gap = int((t1 - parse(prev_end)).total_seconds()) if prev_end else 0
         prev_end = last
         total_dur += dur
-        print(f'{label:24s} {first[11:19]} {last[11:19]} {dur:6d}s {gap:10d}s')
+        print(f'{label:24s} {first[11:19]} {last[11:19]} {hms(dur):>9s} {hms(gap):>11s}')
     wall = int((parse(rows[-1][1]) - run_start).total_seconds())
     print()
-    print(f'sum of phase durations: {total_dur}s ({total_dur/60:.1f}m)')
-    print(f'wall clock first->last: {wall}s ({wall/60:.1f}m)')
-    print(f'gap total (non-phase):  {wall - total_dur}s ({(wall - total_dur)/60:.1f}m)')
+    print(f'sum of phase durations: {hms(total_dur)}')
+    print(f'wall clock first->last: {hms(wall)}')
+    print(f'gap total (non-phase):  {hms(wall - total_dur)}')
 
 COMMANDS = {
     'summary': cmd_summary,

@@ -148,8 +148,9 @@ ETL.
 
 ## Step 6: Implement ETL Topologies
 
-For each depot, implement one or more topologies that consume events
-and maintain PStates.
+Implement the topologies that consume depot events and maintain PStates.
+The mapping is not one-per-depot: one topology can consume several depots,
+and several topologies can consume one depot.
 
 ### Stream vs Microbatch
 
@@ -169,6 +170,23 @@ block until PState updates are visible — e.g., a user registration
 endpoint that must return the created account synchronously, or a
 friend request endpoint where the caller must see the updated state
 immediately upon return.
+
+### How many topologies
+
+Declare a topology only when work requires it — a module whose reads are served by mirrors
+and query topologies needs none.
+
+At most one stream topology. They all share one performance profile — an event takes a few
+milliseconds end to end — so separating them isolates nothing, and it costs write access:
+only the owning topology can write a PState, so a split fixes forever which events can
+update which PStates.
+
+Split microbatch topologies only when you can state each concern's iteration time and they
+differ by an order of magnitude. A microbatch cycle is as slow as the slowest work in it, so
+a 0.5s computation colocated with a 5s one takes 5s. Feature boundaries are not reasons —
+nearly all derived-view work is in one latency class.
+
+When extending an existing module, add to the topologies it already has.
 
 ### ETL patterns
 

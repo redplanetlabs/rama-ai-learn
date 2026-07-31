@@ -28,9 +28,26 @@ TOPOLOGY TYPE RULES:
   (a) millisecond-level update latency — the caller needs PState changes visible immediately
   (b) ack coordination — the caller needs to block or receive a return value via the depot append
 - A single user-facing operation often has multiple processing concerns with different latency
-  requirements. Separate them into different topologies — stream for the latency-sensitive part,
-  microbatch for everything else. Multiple topologies can consume the same depot independently, or the
-  stream topology can communicate to the microbatch topology with an internal depot.
+  requirements. Split them by type — the latency-sensitive part belongs in the stream topology,
+  everything else in the microbatch topology. Multiple topologies can consume the same depot
+  independently, or the stream topology can communicate to the microbatch topology with an
+  internal depot.
+
+TOPOLOGY COUNT RULES:
+- Extending an existing module: add to the topologies it already has. Do NOT add a topology
+  per feature, per subsystem, or per build stage. A new topology permanently partitions PState
+  write access and cannot be undone without a migration.
+- Declare a topology only when work requires it. A module with no ETL — mirrors plus query
+  topologies — has none at all.
+- At most ONE stream topology. Stream topologies all share one performance profile — an event
+  takes a few milliseconds end to end — so a split isolates nothing and only costs write access:
+  a PState is declared on one topology and only that topology can write it, so a later feature
+  needing to write an existing PState from a new event cannot. If you declare a second, state
+  what forces it.
+- Split microbatch topologies ONLY with arithmetic: state each concern's iteration time and show
+  they differ by an order of magnitude. A microbatch cycle is as slow as the slowest work in it,
+  so a 0.5s computation colocated with a 5s one takes 5s. Feature boundaries and differing "feel"
+  are NOT reasons — nearly all derived-view work is in one latency class.
 
 For each topology, list:
 - topology-name: microbatch | stream
