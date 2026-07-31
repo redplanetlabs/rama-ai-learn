@@ -43,7 +43,20 @@ For each read operation, design PStates that make that read efficient:
 - **Multi-read aggregation** (multiple reads on the same partition combined into one result): use a query topology to batch all reads into a single roundtrip instead of multiple foreign selects from the client.
 - **Denormalized views** (precompute expensive queries): materialize a PState that directly answers the query, updated by the topology as data flows in.
 
-Do NOT create separate PStates for multiple categories of data that share the same schema and partition key — this leads to complicated read code with conditionals in both foreign client code and query topologies. Use one PState with a category dimension (e.g., a fixed-keys-schema or map key for the category) instead — this leads to much simpler query code.
+Do NOT declare separate PStates for data that shares a key and a partitioner. Collect it into one PState whose value is a fixed-keys-schema with a field per piece of data:
+
+```clojure
+;; NO — two PState partitions per task holding data for the same key
+(declare-pstate s $$user-names     {Long String})
+(declare-pstate s $$user-locations {Long String})
+
+;; YES — one PState partition, one field per piece of data
+(declare-pstate s $$users {Long (fixed-keys-schema {:name String :location String})})
+```
+
+Every PState partition carries its own memory overhead, so the split costs memory on every task and buys nothing.
+
+The same holds for multiple categories of data sharing a schema and partition key: use one PState with a category dimension (e.g., a fixed-keys-schema or map key for the category), not one PState per category — separate PStates also force conditionals into both foreign client code and query topologies.
 
 Do NOT commit to the first PState design that comes to mind — PState schema is the hardest decision to change later and the wrong schema leads to excessive seeks, complex query code, or both. If the optimal design is obvious (e.g., simple key-value lookup), state why in the plan. If not, consider at least two alternative schemas and cost each for both **latency** and **throughput** (SKILL.md cost model): latency = seeks/iterations on one request's critical path, parallel work counted once; throughput = seeks/iterations summed across all tasks, weighted by each operation's call rate. Pick the design that maximizes throughput within the latency target — not simply the lowest single-request cost. A design can give every request low latency and still exhaust the cluster under load.
 

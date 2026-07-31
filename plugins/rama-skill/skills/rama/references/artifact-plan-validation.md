@@ -13,6 +13,7 @@ Read `PLAN.md` first, then fill in each item below. Extract the relevant data fr
 - If M differs: must be marked variable with dynamic approach. Is it? <yes/no>
 
 ## PState schemas
+- Group the plan's PStates by (key type, partitioner). For each group of two or more, name them and state why they are not one PState whose value is a fixed-keys-schema with a field per piece of data. Only a difference in key structure or partitioner justifies the split — "different concerns", "different subsystems", "different lifecycles", or "clearer separation" do NOT. <list each group and its justification — if any group of two or more PStates shares a key type and partitioner without such a justification, FAIL: every PState partition carries its own memory overhead on every task>
 - Any Object type? <yes/no — if yes, FAIL>
 - Uniform record-like values (all instances have same fields) use fixed-keys-schema? <yes/no – if no, FAIL>
 - If different instances at the same PState position have different fields, the schema MUST use definterface + defrecord. Representing that variation with IPersistentMap, Object, a fixed-keys-schema of optional/nil fields, or a "justified deviation" is a FAIL. (A nullable field on instances that otherwise share the same shape is not this case — that is fine.) <yes/no – if no, FAIL>
