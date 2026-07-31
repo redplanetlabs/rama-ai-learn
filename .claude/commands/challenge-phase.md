@@ -38,6 +38,7 @@ Any specification in the README or protocol is non-negotiable.
 - **Do NOT run any command with `run_in_background`.** You are running headlessly: ending your turn ends the session, and background-task completion notifications will NEVER arrive. A backgrounded test run is orphaned and the phase fails with no verdict. Run long commands (test suites, REPL checks) in the foreground with an explicit generous timeout.
 - **rama-helpers is available but not necessarily needed.** Use only if relevant and helpful.
 - **Test harness does NOT influence topology choice.** The challenge harness (`wait-for-processing*`) auto-detects stream vs microbatch and synchronizes correctly for both. Choose topology based on domain requirements, not test synchronization patterns.
+- **`wait-for-processing!` exists so the module can be tested — it is not production code.** Implementing `harness/Synchronizable` on the client wrapper and calling `com.rpl.rama.test` helpers (e.g. `wait-for-microbatch-processed-count`) from it is correct and expected here. The skill's rule against those helpers in client wrappers governs wrappers that ship to production; this wrapper does not.
 - **Phase 5 (tests) constraints:**
   - Do NOT use `rama-challenges.harness` in tests — not in requires, imports, or fully-qualified calls.
   - If the module uses tick depots, use `rama-challenges.shared/REPLACE-TICK-DEPOTS` (already on classpath). Read its docstring for usage.
