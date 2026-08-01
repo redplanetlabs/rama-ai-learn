@@ -1501,9 +1501,13 @@
   remaining budget."
   [agent-fns challenge-name project-root agent-name model reasoning
    run-start-time run-start-millis]
-  ;; Decompose and full-spec-review run on the slow tier — the highest-leverage
-  ;; reasoning stages (structure and adversarial safety). Phase 0 (implicit
-  ;; spec) is requirements enumeration, not design, so it runs on the fast tier.
+  ;; Phase 0, decompose and full-spec-review run on the slow tier — the
+  ;; highest-leverage reasoning stages (requirements interpretation, structure,
+  ;; adversarial safety). Phase 0 was previously on the fast tier on the grounds
+  ;; that it is enumeration rather than design; that is wrong. Deciding how much
+  ;; an explicit latitude clause permits is interpretation, and IMPLICIT_SPEC.md
+  ;; binds every later phase while being exempt from their validation checks, so
+  ;; an error there is unrecoverable downstream.
   ;; Subproblem cycles run planning + validation on the slow tier and the rest
   ;; on the tier chosen by phase 2's classification (see run-subsystem-phases!).
   (let [fast-tier (tier-config :fast)
@@ -1545,7 +1549,7 @@
     (or
      ;; Stage: phase 0 (implicit spec).
      (budget-exceeded [] "phase 0")
-     (let [r0 (run-stage! 0 :fast)
+     (let [r0 (run-stage! 0)
            results [r0]]
        (or
         (stage-failure r0 results)
