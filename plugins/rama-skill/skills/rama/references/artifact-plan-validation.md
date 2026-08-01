@@ -66,7 +66,7 @@ Partitioning efficiency — check the `## Partitioning efficiency` table in `PLA
 - For each TaskGlobal or in-memory cache, does the plan use compact, flat data structures (primitive arrays) instead of object-heavy structures (TreeMap, HashMap, vectors of maps)?
 - Object-heavy structures create per-entry heap overhead (object headers, pointers, boxed primitives) and produce large object graphs that increase GC pause times. On a latency-sensitive task thread, GC pauses cause latency spikes that propagate to all operations on that task — including unrelated reads and writes. The effect is non-local: one task's GC pause delays every client whose request routes to that task.
 - For each TaskGlobal: FAIL if the data can be partially or fully stored in a compact, flat data structure.
-- Does any TaskGlobal store data that could be fetched from a PState at query time without violating latency requirements? If so, FAIL.
+- Does any TaskGlobal store data that could be fetched from a PState at query time without violating latency requirements, is not rebuildable from durable state, and is not something the spec tolerates losing? If so, FAIL.
 
 ## Minimality — adversarial simplification
 
