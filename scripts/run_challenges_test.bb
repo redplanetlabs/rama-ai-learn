@@ -635,7 +635,7 @@
 
 (deftest phase-cmd-subsystem-test
   ;; Tests the subsystem-aware arity of the phase command builders and the
-  ;; rendering of keyword stage ids (decompose, full-spec-review, full-spec-fix).
+  ;; rendering of keyword stage ids (decompose, full-spec-review).
   (testing "claude-phase-cmd"
     (testing "appends the subsystem slug as a third argument"
       (let [cmd (claude-phase-cmd "test-ch" 3 "/root" nil nil "alpha")]
@@ -691,7 +691,7 @@
   [phase-id _subsystem _attempt]
   (cond
     (= 2 phase-id) :pass
-    (contains? #{:build :full-spec-review :full-spec-fix} phase-id) :pass
+    (contains? #{:build :full-spec-review} phase-id) :pass
     :else nil))
 
 (defn- decompose-fixture-script
@@ -932,25 +932,23 @@
         (is (re-find #"=== PHASE 2 \[beta\] attempt 4 — " reasoning)))
       (is (= 2 (:iterations result)) "one build invocation per subsystem"))))
 
-(deftest phase-loop-full-spec-review-fix-test
-  ;; A failed review triggers a fix session and a fresh re-review; a passing
-  ;; re-review passes the run.
-  (testing "review fail → fix → review pass"
+(deftest phase-loop-full-spec-review-single-invocation-test
+  ;; The full-spec stage is ONE agent session that reviews AND fixes, looping
+  ;; internally. The runner never issues a second review and never issues a
+  ;; separate fix session, whatever the verdict.
+  (testing "a passing review is the last invocation of the run"
     (let [{:keys [result invocations]}
           (simulate-phase-loop
            {:decomposition single-subsystem-decomposition
-            :verdict-fn (fn [phase-id subsystem attempt]
-                          (if (= :full-spec-review phase-id)
-                            (if (= 1 attempt) :fail :pass)
-                            (passing-verdicts phase-id subsystem attempt)))})]
+            :verdict-fn passing-verdicts})]
       (is (= :pass (:status result)))
-      (is (= [[:full-spec-review nil 1] [:full-spec-fix nil 1] [:full-spec-review nil 2]]
-             (vec (take-last 3 invocations)))))))
+      (is (= [:full-spec-review nil 1] (last invocations)))
+      (is (= 1 (count (filterv (fn [[p _ _]] (= :full-spec-review p)) invocations)))
+          "exactly one review invocation")
+      (is (empty? (filterv (fn [[p _ _]] (= :full-spec-fix p)) invocations))
+          "no separate fix session exists")))
 
-(deftest phase-loop-full-spec-review-cap-test
-  ;; A review that keeps failing exhausts the 3 review→fix rounds and fails
-  ;; the run.
-  (testing "review fail x4 exceeds the cap"
+  (testing "a failing review fails the run without re-running or fixing"
     (let [{:keys [result invocations]}
           (simulate-phase-loop
            {:decomposition single-subsystem-decomposition
@@ -959,11 +957,10 @@
                             :fail
                             (passing-verdicts phase-id subsystem attempt)))})]
       (is (= :fail (:status result)))
-      (is (re-find #"Full-spec review still failing after 3" (:failure-reason result)))
-      (is (= 4 (count (filterv (fn [[p _ _]] (= :full-spec-review p)) invocations)))
-          "reviews run 4 times (initial + one per fix round)")
-      (is (= 3 (count (filterv (fn [[p _ _]] (= :full-spec-fix p)) invocations)))
-          "fix sessions run 3 times (the cap)"))))
+      (is (re-find #"unresolved items" (:failure-reason result)))
+      (is (= 1 (count (filterv (fn [[p _ _]] (= :full-spec-review p)) invocations)))
+          "still exactly one review invocation — no runner-side retry")
+      (is (empty? (filterv (fn [[p _ _]] (= :full-spec-fix p)) invocations))))))
 
 (deftest phase-loop-subsystem-gate-cap-test
   ;; A gate-2 cap blowout in subsystem 1 fails the whole run naming the

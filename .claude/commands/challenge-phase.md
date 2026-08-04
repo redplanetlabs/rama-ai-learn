@@ -6,7 +6,7 @@ arguments:
     description: Name of the challenge under challenges/
     required: true
   - name: phase_id
-    description: Phase to execute (0, decompose, 1, 2, build, full-spec-review, or full-spec-fix)
+    description: Phase to execute (0, decompose, 1, 2, build, or full-spec-review)
     required: true
   - name: subsystem
     description: Subsystem slug from DECOMPOSITION.json (present only on multi-subsystem runs, phases 1..7)
@@ -72,7 +72,7 @@ skill documentation failed you. Mark them with a `CONFUSION:` prefix.
 - Do NOT rewrite REASONING.md, do NOT edit or delete prior entries, and do
   NOT remove sentinel lines. The file is append-only.
 - This phase is NOT complete until REASONING.md has at least one entry for
-  this phase. Verdict phases (2, build, full-spec-review, full-spec-fix):
+  this phase. Verdict phases (2, build, full-spec-review):
   record the reasoning behind your verdict before emitting it. Decompose:
   record the boundaries you considered and rejected.
 
@@ -92,8 +92,7 @@ Read the per-phase doc for `<phase_id>` and follow it. Do not read other phase d
 | 6 | `plugins/rama-skill/skills/rama/references/phase-6-test-validate.md` | `implementations/<challenge_name>/TEST_VALIDATION.md` |
 | 7 | `plugins/rama-skill/skills/rama/references/phase-7-finish.md` | passing tests; module + tests modified in place |
 | build | `plugins/rama-skill/skills/rama/references/phase-build.md` | module + IMPLEMENTATION_VALIDATION.md + tests + TEST_VALIDATION.md; passing suite |
-| full-spec-review | `plugins/rama-skill/skills/rama/references/phase-full-spec-review.md` (review session) | `implementations/<challenge_name>/FULL_SPEC_REVIEW.md` |
-| full-spec-fix | `plugins/rama-skill/skills/rama/references/phase-full-spec-review.md` (fix session) | module + tests fixed in place; full suite passing |
+| full-spec-review | `plugins/rama-skill/skills/rama/references/phase-full-spec-review.md` | `implementations/<challenge_name>/FULL_SPEC_REVIEW.md`; module + tests fixed in place; full suite passing |
 
 The implementation root is `implementations/<challenge_name>/` — substitute this for `<impl-root>` in any cp command in the per-phase doc.
 
@@ -147,7 +146,7 @@ If a validation artifact already exists from a prior attempt at this phase or a 
 
 ## Verdict emission (validation phases only)
 
-Phases 2, build, full-spec-review, and full-spec-fix emit verdicts as the LAST non-empty line of output. The runner extracts this line; do not put any text after it.
+Phases 2, build, and full-spec-review emit verdicts as the LAST non-empty line of output. The runner extracts this line; do not put any text after it.
 
 - **Phase 2** (plan validation) — three-way verdict:
   ```
@@ -161,8 +160,7 @@ Phases 2, build, full-spec-review, and full-spec-fix emit verdicts as the LAST n
   PHASE_VALIDATION:pass
   PHASE_VALIDATION:fail
   ```
-- **full-spec-review** — binary verdict reflecting whether the whole module + test suite satisfies the whole spec (default fail). On fail, the runner invokes full-spec-fix and then re-runs the review fresh.
-- **full-spec-fix** — binary verdict reflecting whether the full test suite passes after applying every FAIL item from `FULL_SPEC_REVIEW.md`.
+- **full-spec-review** — binary verdict reflecting whether the whole module + test suite satisfies the whole spec (default fail). This is a single session that reviews AND fixes, looping until it finds nothing new; there is no separate fix invocation and no round cap. `pass` means a full pass found nothing and the suite is green.
 
 Default to FAIL (or `major-fail` for phases 2, 4, and 6). PASS only after the criteria in the per-phase doc are met.
 

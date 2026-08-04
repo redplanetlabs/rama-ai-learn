@@ -174,7 +174,7 @@
 (defn phase-id-str
   "Render a phase id for command lines, sentinels, and filenames.
   Numbered phases render as their number; keyword stages (:decompose,
-  :full-spec-review, :full-spec-fix) render as their name."
+  :full-spec-review) render as their name."
   [phase-id]
   (if (keyword? phase-id) (name phase-id) (str phase-id)))
 
@@ -480,7 +480,7 @@
   Filename: {date}-{time}-{agent}[-{model}][-{reasoning}]-{challenge}[-{subsystem}]-phase{ID}[-attempt{K}][-retry{R}].jsonl
   The {subsystem} segment is present only on multi-subsystem runs (n > 1).
   {ID} is the phase number for numbered phases, or the stage name for keyword
-  stages (decompose, full-spec-review, full-spec-fix).
+  stages (decompose, full-spec-review).
   {K} counts validation-driven retries (a phase re-run because a later phase
   failed it); {R} counts transient-server-error re-invocations of the SAME
   attempt. They are separate segments because they mean different things: {K}
@@ -1385,90 +1385,63 @@
            :failure-reason (format "Unexpected phase %s in subsystem loop." (phase-id-str phase-id))
            :transcript-path (:transcript-path r)})))))
 
-(def full-spec-review-cap
-  "Max number of review→fix rounds for the full-spec-review stage. The review
-  re-runs fresh after each fix; if the review still fails after the last
-  allowed fix, the stage fails."
-  3)
-
 (defn run-full-spec-review!
-  "Run the full-spec-review stage: an adversarial fresh-context review of the
-  ENTIRE module + test suite against the ENTIRE original spec. Always runs,
-  even on single-subsystem runs. On a fail verdict a full-spec-fix session
-  applies every FAIL item from FULL_SPEC_REVIEW.md, then the review re-runs
-  fresh. Up to full-spec-review-cap fix rounds. The review verdict is the sole
-  gate — the fix session's verdict is telemetry only (a bad fix is caught by
-  the re-review). Returns {:status :pass|:fail|:timeout, :phase-results [...],
+  "Run the full-spec-review stage: an adversarial whole-spec review of the
+  ENTIRE module + test suite against the ENTIRE original spec, followed by
+  whatever fixing that review demands. Always runs, even on single-subsystem
+  runs.
+
+  ONE invocation. The session reviews, fixes what it found, re-reviews its own
+  fixes, and repeats until it is clean — the loop lives inside the session, not
+  here. A runner-side review→fix→re-review loop spent a full re-read of the
+  module and test suite on every round (fresh context each time) and was capped
+  at a fixed number of rounds, so it both cost more and gave up while still
+  making progress. The only bound now is the run's time budget.
+
+  Returns {:status :pass|:fail|:timeout, :phase-results [...],
   :failure-reason str?, :transcript-path str}."
   [agent-fns challenge-name project-root agent-name model reasoning
    run-start-time run-start-millis]
-  (loop [review-attempt 1
-         fix-rounds 0
-         results []]
-    (if (<= (time-remaining-s run-start-millis) 0)
-      {:status :timeout
-       :phase-results results
-       :failure-reason (format "Overall challenge time budget (%ds) exceeded before full-spec-review."
-                               *overall-timeout-s*)
-       :transcript-path (:transcript-path (last results))}
-      (let [r (run-phase! agent-fns challenge-name :full-spec-review review-attempt nil
-                          project-root agent-name model reasoning
-                          run-start-time run-start-millis)
-            results' (conj results r)]
-        (cond
-          (:timed-out? r)
-          {:status :timeout
-           :phase-results results'
-           :failure-reason (format "Phase full-spec-review (attempt %d) timed out." review-attempt)
-           :transcript-path (:transcript-path r)}
+  (if (<= (time-remaining-s run-start-millis) 0)
+    {:status :timeout
+     :phase-results []
+     :failure-reason (format "Overall challenge time budget (%ds) exceeded before full-spec-review."
+                             *overall-timeout-s*)
+     :transcript-path nil}
+    (let [r (run-phase! agent-fns challenge-name :full-spec-review 1 nil
+                        project-root agent-name model reasoning
+                        run-start-time run-start-millis)
+          results [r]]
+      (cond
+        (:timed-out? r)
+        {:status :timeout
+         :phase-results results
+         :failure-reason "Phase full-spec-review timed out."
+         :transcript-path (:transcript-path r)}
 
-          (not= 0 (:exit r))
-          {:status :fail
-           :phase-results results'
-           :failure-reason (format "Phase full-spec-review (attempt %d) exited %d."
-                                   review-attempt (:exit r))
-           :transcript-path (:transcript-path r)}
+        (not= 0 (:exit r))
+        {:status :fail
+         :phase-results results
+         :failure-reason (format "Phase full-spec-review exited %d." (:exit r))
+         :transcript-path (:transcript-path r)}
 
-          (= :pass (:verdict r))
-          {:status :pass
-           :phase-results results'
-           :transcript-path (:transcript-path r)}
+        (= :pass (:verdict r))
+        {:status :pass
+         :phase-results results
+         :transcript-path (:transcript-path r)}
 
-          (= :fail (:verdict r))
-          (if (< fix-rounds full-spec-review-cap)
-            (let [fix-attempt (inc fix-rounds)
-                  f (run-phase! agent-fns challenge-name :full-spec-fix fix-attempt nil
-                                project-root agent-name model reasoning
-                                run-start-time run-start-millis)
-                  results'' (conj results' f)]
-              (cond
-                (:timed-out? f)
-                {:status :timeout
-                 :phase-results results''
-                 :failure-reason (format "Phase full-spec-fix (attempt %d) timed out." fix-attempt)
-                 :transcript-path (:transcript-path f)}
+        (= :fail (:verdict r))
+        {:status :fail
+         :phase-results results
+         :failure-reason "Full-spec review ended with unresolved items."
+         :transcript-path (:transcript-path r)}
 
-                (not= 0 (:exit f))
-                {:status :fail
-                 :phase-results results''
-                 :failure-reason (format "Phase full-spec-fix (attempt %d) exited %d."
-                                         fix-attempt (:exit f))
-                 :transcript-path (:transcript-path f)}
-
-                :else
-                (recur (inc review-attempt) (inc fix-rounds) results'')))
-            {:status :fail
-             :phase-results results'
-             :failure-reason (format "Full-spec review still failing after %d review→fix rounds."
-                                     fix-rounds)
-             :transcript-path (:transcript-path r)})
-
-          :else
-          {:status :fail
-           :phase-results results'
-           :failure-reason (format "Full-spec review did not emit a valid PHASE_VALIDATION verdict (got %s)."
-                                   (:verdict r))
-           :transcript-path (:transcript-path r)})))))
+        :else
+        {:status :fail
+         :phase-results results
+         :failure-reason (format "Full-spec review did not emit a valid PHASE_VALIDATION verdict (got %s)."
+                                 (:verdict r))
+         :transcript-path (:transcript-path r)}))))
 
 (defn phase-loop!
   "Drive the full challenge pipeline. Returns a map:
