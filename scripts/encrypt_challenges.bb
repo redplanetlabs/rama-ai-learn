@@ -183,6 +183,49 @@
       (decrypt-file! key-bytes f))
     (count files)))
 
+;;; ── full-challenge encryption ───────────────────────────────────────────────
+;; Sensitive-only encryption (above) hides reference solutions and private
+;; tests while leaving a challenge's README, protocol, and provided source
+;; readable — correct for the challenge being worked on. But OTHER challenges
+;; must be hidden ENTIRELY while one challenge is under test, because one
+;; challenge's provided code or reference solution can be the answer to
+;; another (e.g. fanout ships the full social-graph module that the social
+;; graph challenge asks the agent to build). Full encryption hides everything.
+
+(defn- challenge-base-path
+  [challenge-name-or-path]
+  (if (fs/absolute? (fs/path (str challenge-name-or-path)))
+    (fs/path (str challenge-name-or-path))
+    (fs/path project-root "challenges" (str challenge-name-or-path))))
+
+(defn- challenge-all-files
+  "Every regular file under a challenge directory, excluding generated dirs."
+  [base]
+  (->> (file-seq (fs/file base))
+       (filter (fn [^java.io.File f] (.isFile f)))))
+
+(defn encrypt-challenge-fully!
+  "Encrypt EVERY file in a challenge directory — README, protocol, src
+   (including provided modules), tests, deps.edn, all of it — so a challenge
+   under test cannot read another challenge. Skips generated build dirs and
+   already-encrypted .enc files. Returns the number of files encrypted."
+  [key-bytes challenge-name]
+  (let [files (->> (challenge-all-files (challenge-base-path challenge-name))
+                   (remove #(str/ends-with? (str %) ".enc")))]
+    (doseq [f files]
+      (encrypt-file! key-bytes f))
+    (count files)))
+
+(defn decrypt-challenge-fully!
+  "Decrypt every .enc file in a challenge directory. Inverse of
+   `encrypt-challenge-fully!`. Returns the number of files decrypted."
+  [key-bytes challenge-name]
+  (let [files (->> (challenge-all-files (challenge-base-path challenge-name))
+                   (filter #(str/ends-with? (str %) ".enc")))]
+    (doseq [f files]
+      (decrypt-file! key-bytes f))
+    (count files)))
+
 ;;; ── challenge order ─────────────────────────────────────────────────────────
 
 (defn- parse-challenge-order [path]

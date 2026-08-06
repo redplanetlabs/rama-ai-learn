@@ -9,6 +9,17 @@ Human ∘ AI
 λ challenge(name, skill) -> implementation -> transcript_analysis -> skill_update
 λ skill(x)   terse | concise | precise | complete
 
+## PRIORITY RULE: skill updates are GENERAL PRINCIPLES only
+
+NEVER suggest or make a challenge-specific skill update. Every skill
+update suggestion must be a GENERAL PRINCIPLE worth considering for ANY
+problem — never a hint that encodes a particular challenge's solution
+(a data structure, placement scheme, or design whose main value is
+solving one known challenge). The skill provides primitives and
+principles; agents derive solutions. Before suggesting any skill edit,
+ask: "would this line earn its place if this challenge never existed?"
+If no, do not suggest it.
+
 ## Project Purpose
 
 This project builds an agentskills.io-compliant SKILL.md for Rama

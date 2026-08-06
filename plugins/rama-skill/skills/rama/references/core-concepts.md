@@ -4,7 +4,7 @@
 
 **Depots** are append-only partitioned logs. All data enters the system through depots. Each append is routed to a partition by the depot's partitioner (e.g., `(hash-by :user-id)`).
 
-**PStates** are partitioned, durable, replicated indexed state. Topologies consume depot records and materialize PStates. A PState is owned by exactly one topology — only that topology may write it. Any topology in the same module may read it.
+**PStates** are partitioned, durable, replicated indexed state. Topologies consume depot records and materialize PStates. A PState is owned by exactly one topology — only that topology may write it. Any topology in the same module may read it. Other topologies (whether a different topology type or the same topology type) only read committed state.
 
 **Topologies** are computation units:
 - **Stream** — event-driven, low-latency, configurable at-least-once or at-most-once. Each depot record triggers immediate processing. Transaction scope = between partitioners (per-task atomic). Stream topologies participate in depot ack — a client appending with `:ack` blocks until the stream topology finishes processing that record and PState updates are visible. This enables write-then-read-back patterns (e.g., register user, then immediately read back).

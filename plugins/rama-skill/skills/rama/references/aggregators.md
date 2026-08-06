@@ -78,7 +78,7 @@ distributes over aggregation.
 ### 4) +group-by
 
 - key : E -> K, result : K -> S_i (one per agg i)
-- auto hash-partitions by key, runs each agg per key-group
+- auto hash-partitions by key, runs each agg per key-group — the final pre-agg partitioner other aggregators require is NOT needed
 - emits one output row per key
 - max 6 grouping vars; batch/query-topology only
 

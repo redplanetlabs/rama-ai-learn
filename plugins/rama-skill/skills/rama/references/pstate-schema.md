@@ -35,6 +35,8 @@ Vectors and sets cannot be top-level. Use `java.util.ArrayList` or
 
 **First-class schemas** (top-level map and fixed-keys-schema) are backed by RocksDB — each key/field is individually addressable on disk. Reads and writes to individual keys are efficient O(1) operations without loading the entire structure.
 
+The PState root is NOT a writable location: a root-level `(termval ...)` over a top-level map or fixed-keys-schema fails at runtime (it would replace a RocksDB-backed structure with a plain value). Write individual keys/fields instead. Root-level `termval` is valid only when the top-level schema is a Class reference. This constrains the root only — nested map and fixed-keys-schema values are ordinary write targets (see `paths.md`).
+
 **Class-reference schemas** (top-level `Long`, `String`, `Object`, etc.) are backed by a single value on disk. The entire value is read/written as one unit. These do not support subindexing.
 
 **Writes are batched to disk** according to topology type: microbatch flushes at the end of each microbatch attempt, stream flushes at the end of each batch of streaming events executed together on a task. Individual `local-transform>` calls within a batch update an in-memory buffer; the disk write happens once at batch boundary.
@@ -43,13 +45,40 @@ Vectors and sets cannot be top-level. Use `java.util.ArrayList` or
 
 **Nested structures** — maps, sets, and vectors nested inside a first-class schema — are stored as single serialized values by default. Without subindexing, the entire nested structure must be read from and written to disk even for a single-element operation.
 
+## Partitioning control
+
+A write lands on whatever task the topology routes to before the `local-transform>` — there is no default placement. So the design question is not "which partitioner do I pick?" but **"what placement do I want?"**: for each key, the set of task(s) its data should live on — a mapping `f(key) → task(s)`, chosen so the dominant **read's** access pattern is cheap. Derive `f` first, then implement it. `f` need not be a formula over the key — placement can also be stored state, recorded at write time and read back before routing. The built-in partitioners are just common cases of `f`:
+
+- **`(|hash *k)`** — `f(k) = hash(*k) mod N`, one task per key: the same key always lands on the same task (ordered, colocated), and keys spread across tasks with no coordination. The right `f` for uniform data. It can't balance when:
+  - **Hash variance** — hashing is balls-into-bins: `M` keys into `N` tasks gives a per-task load of about `M/N ± √(2·(M/N)·ln N)`, so the relative imbalance is roughly `√(2·ln N / (M/N))` — small only when there are *many* keys per task. With few keys per task the busiest task runs several times the average and some tasks sit idle, even though `M > N`. E.g. with `N = 100` tasks: `M = 100` keys → ~37% of tasks empty and the busiest holds ~3–4×; `M = 1,000` → busiest ~2×; `M = 100,000` → within ~10%.
+  - **Per-key skew** — a few keys take far more events or data than the rest; all of a hot key's writes land on its one task, making it a hotspot. Hash balances *keys*, not *load*.
+- **`(|all)`** — `f` = every task: the data lives on all N tasks. The right `f` for small, rarely-written data read locally everywhere (e.g. config and lookup tables) — each task keeps its own copy, so reads are local with no cross-task hop. Not for large or frequently-written data — every task pays every write.
+- **`(|direct *task-id)`** — implements **any** `f`: you compute the task id, so you place a key's data on exactly the task(s) you choose. Get the task count from module instance info — wrap the Java call in a function, since interop isn't available inline in dataflow:
+
+```clojure
+(defn num-tasks ^long [^ModuleInstanceInfo info] (.getNumTasks info))
+
+;; in a topology:
+(ops/module-instance-info :> *info)
+(num-tasks *info :> *n)
+(mod *x *n :> *task-id)        ;; any scheme you choose
+(|direct *task-id)
+(local-transform> [(keypath *k) ...] $$data)
+```
+
+For **skewed** data, do NOT pick the cheapest-looking partitioner off this menu and settle. Derive the `f` the dominant read wants — e.g. *how many tasks should one key's data span as a function of its size?* — and implement it with `|direct`. Starting from `|all` (or `|hash`) and asking "is this good enough?" anchors you on the wrong `f`; start from the ideal placement the access pattern wants and specialize to a built-in only when one is exactly that `f`. Note that `|direct`-placed data remains reachable from other modules — mirror reads route to any source partition with `|direct$$` (see `references/mirrors.md`).
+
+Consider candidate `f`s that store state to assist placement, and compare all candidates — stored or computed — on TOTAL cost, the placement state's own reads and writes included. Do NOT reject a stored-placement `f` as "extra bookkeeping" or "added complexity"; reject it only on that computed total cost.
+
 ## Subindexing
 
 **Subindexing** indexes each element of a nested collection separately on disk via RocksDB, just like top-level keys. Subindexed structures can exceed available memory since elements are stored and retrieved individually. Benefits:
 - O(1) point lookups into arbitrarily large nested structures
 - Subindexed maps and sets are sorted — efficient range queries
   - Sorting is lexicographic based on the serialized form of the key
+    - Numbers, strings, characters, and keywords sort the same as their in-memory forms
   - UUID7 keys sort in time order (see unique-ids.md)
+  - Top-level keys sort the same way, not just subindexed
 - O(1) size queries (when size tracking is on)
 
 **Critical constraint:** A subindexed structure is NOT a plain value — it is a handle to RocksDB storage. It can be used like a plain data structure, but it cannot be transferred over network boundaries. Queries must always navigate INTO it using element/range navigators (`ALL`, `MAP-VALS`, `MAP-KEYS`, `sorted-map-range`, `sorted-set-range-from-start`, etc.) to access individual elements, which are plain serializable values.
@@ -105,8 +134,9 @@ count. Disable for write-heavy paths that never query size:
   {String (set-schema Long {:subindex-options {:track-size? false}})})
 ```
 
-With size tracking on, `(view count)` is O(1).
-Without it, O(n).
+`{:subindex-options {:track-size? true}}` is equivalent to `{:subindex? true}`
+
+With size tracking on, `(view count)` is O(1). Without it, O(n).
 
 ### Sorted Range Queries
 
@@ -155,7 +185,11 @@ only need to include the keys being set.
 - `:global?` — single-partition state on task 0 (counts, top-N)
 - `:initial-value` — only for class-reference top-level schemas
 - `:private?` — topology-internal only; throws on foreign access
-- `:key-partitioner` — `(fn [num-partitions key] partition-idx)`
+- `:key-partitioner` — `(fn [num-partitions key] partition-idx)`.
+  - default to hash partitioning equivalent to `|hash`
+
+Class-typed positions match **exactly**, with no widening: `Integer` is not
+`Long`.
 
 ## Schema Validation Options
 
@@ -213,7 +247,12 @@ Read-only cross-module reference to another module's PState:
 ```
 
 Four args: setup handle, local PState symbol, source module name (string),
-source PState name (string). Queries route to the source module's partitions.
+source PState name (string).
+
+Reads on a mirror are NOT limited to key routing. Mirror partitioners
+(`|hash$$`, `|all$$`, `|direct$$`) give the consuming topology the same
+routing control the owner has. Read `references/mirrors.md`
+before designing any cross-module read contract.
 
 ## Cross-References
 
@@ -268,15 +307,13 @@ Schema type rules:
 
 ## `:initial-value` Rules
 
-```text
-:initial-value availability by schema type:
+`:initial-value` is ONLY valid for a top-level class schema (e.g. `Long`, `String`) — the single-value-per-partition case:
 
-value-schema       ✗  (no options map accepted; Syntax error macroexpanding)
-{K V}  (map)       ✗  (Top-level maps cannot have an init value)
-vector-schema      ✓
-set-schema         ✓
-fixed-keys-schema  ✓  (per-key defaults via schema)
+```clojure
+(declare-pstate s $$p Long {:initial-value 0})
 ```
+
+Every other top-level schema rejects it: top-level maps and fixed-keys-schema cannot have an init value (keys/fields simply start absent), and vectors/sets cannot be top-level at all. For "start at zero" semantics inside a map, use a write-time default in the transform path — e.g. `[(keypath *k) (nil->val 0) (term inc)]` — or use the `+compound` aggregator form, which initializes non-existent locations it encounters (see `aggregators.md`).
 
 ## PState Nil Semantics
 

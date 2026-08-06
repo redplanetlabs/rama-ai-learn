@@ -24,6 +24,8 @@ TaskGlobals are accessible from any topology within the owning module. They are 
 
 TaskGlobals can be **mutated** from any topology type — stream, microbatch, and query topologies alike. The "read-only" restriction on query topologies applies to PStates, not task globals. Tasks are single-threaded, so mutation is safe without locking wherever it happens.
 
+A query topology that mutates a TaskGlobal does so **synchronously**: the mutation is applied and visible by the time `foreign-invoke-query` returns, with no depot and no asynchronous processing. For state that must be updated in memory without durability, this is the write path — routing such a write through a depot + stream/microbatch instead adds durability and asynchrony the state does not need.
+
 ## Declaration
 
 `declare-object` values follow the same rules as constants embedded in dataflow code (see dataflow.md). Invalid values fail at module launch with `Object cache disallowed {:class ...}`.

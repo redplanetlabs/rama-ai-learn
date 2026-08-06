@@ -10,6 +10,8 @@ Microbatch topologies provide exactly-once PState updates, cross-partition atomi
 
 Microbatch sources bind to **fragment vars** (`%mb`), not value vars. The fragment var represents the current batch of records across all tasks. Emitting from it with `(%mb :> *record)` iterates over all records in this microbatch on every task where records landed.
 
+`%mb` emits per task, in depot append order: each task emits its local depot partition's records in the order they were appended.
+
 Each `source>` in a `<<sources` block begins an independent dataflow section with its own variable scope — vars bound under one source are not visible under another.
 
 ```clojure
@@ -109,11 +111,11 @@ A `<<batch` block does not have to emit from a fragment var. It can run code tha
 
 Because `<<batch` is a global barrier, Batch 2 sees the results of Batch 1 across all tasks.
 
-**Tick depots for timely background work.** When subscribed depots have no new data, the next microbatch is delayed up to a minute by default (see "Behavior when subscribed depots are empty"). If the background work needs to run on a regular cadence regardless of whether new events arrive, subscribe the topology to a **tick depot** (`declare-tick-depot`) that fires periodically. Emit from the tick fragment var (`(%tick)`) without binding any output — this forces the microbatch to run on every tick even when `*events` has no new data. Without a tick depot, the background `<<batch` only runs when new events arrive on other subscribed depots.
+**Tick depots for timely background work.** When subscribed depots have no new data, the next microbatch is delayed up to a minute by default (see "Behavior when subscribed depots are empty"). If the background work needs to run on a regular cadence regardless of whether new events arrive, subscribe the topology to a **tick depot** (`declare-tick-depot`) that fires periodically. Emit from the tick fragment var (`(%tick)`) without binding any output — this forces the microbatch to run on every tick even when `*events` has no new data. Without a tick depot, the background `<<batch` only runs when new events arrive on other subscribed depots or the sleep interval for microbatching has passed (one minute by default).
 
 ## Transaction scope
 
-Cross-partition atomicity by construction: `Write $$p1` then partitioner then `Write $$p2` remain one transaction within a microbatch attempt.
+Cross-partition atomicity by construction: `Write $$p1` then partitioner then `Write $$p2` remain one transaction within a microbatch attempt. This governs what survives — no attempt leaves permanent partial state — not what an external reader observes while the tasks are committing (see "Guarantees").
 
 ```text
 txn-scope(microbatch) = microbatch-attempt   -- entire attempt across all tasks
@@ -123,7 +125,8 @@ txn-scope(microbatch) = microbatch-attempt   -- entire attempt across all tasks
 
 - **Exactly-once PState updates** across retries of the same microbatch ID. Non-deterministic ops (`|shuffle`, mirror reads) may vary per retry, but PState writes converge.
 - **Depot appends** (`depot-partition-append!`) from microbatch code do NOT have exactly-once semantics on retry. A retry re-appends.
-- **Phases per attempt:** prime (clear buffers, reset PStates to previous state) → process → commit (checkpoint + replicate). During the commit phase, each task commits independently and its writes become visible as soon as its own commit finishes — so external readers can observe two tasks on different microbatches at the same moment. The topology does not start the next microbatch until ALL tasks have committed successfully.
+- **Phases per attempt:** prime (clear buffers, reset PStates to previous state) → process → commit (checkpoint + replicate). During the commit phase, each task commits independently and its writes become visible as soon as its own commit finishes — so external readers can observe two tasks on different microbatches at the same moment. The topology does not start the next microbatch until ALL tasks have committed successfully. Cross-partition atomicity (see "Transaction scope") is a property of the settled result, not of what a reader sees mid-commit.
+- **A record that throws deterministically retries forever.** The attempt is reset and reapplied indefinitely, blocking the topology. Malformed input must be rejected in dataflow, not allowed to throw.
 - **Read visibility:** reads inside the owning topology (e.g. later `<<batch` blocks of the same attempt) see its uncommitted PState writes; readers outside the owning topology — query topologies, foreign reads, other topologies — see only committed state.
 
 ## Ack semantics

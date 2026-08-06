@@ -35,7 +35,7 @@ simulates a full cluster in a single process with no mocks required.
 
 ## Axioms
 
-1. **IPC = real cluster** — no capability or semantic differences; only replication factor (always 1) and serialization scope differ
+1. **IPC = real cluster** — no capability or semantic differences; only replication factor (always 1) and serialization scope differ. Performance is NOT equivalent: IPC timings are not a proxy for production latency or throughput. Only order-of-magnitude results mean anything.
 2. **ACK blocks downstream** — acked depot appends block until all downstream processing on colocated stream topologies complete; assertions are immediate
 3. **ACK does not cross module boundaries** — mirror depot stream topologies in other modules are not waited on; polling required
 4. **Microbatch count is cumulative** — `wait-for-microbatch-processed-count` tracks total records ever processed, not since last call
@@ -105,7 +105,16 @@ on PStates immediately after appends.
 
 Microbatch processing is asynchronous to depot appends. Use
 `wait-for-microbatch-processed-count` to block until processing
-completes. Accepts an optional `timeout-millis` (throws on timeout).
+completes.
+
+```clojure
+(rtest/wait-for-microbatch-processed-count ipc module-name topology-name count)
+(rtest/wait-for-microbatch-processed-count ipc module-name topology-name count timeout-millis)
+```
+
+Blocks until the microbatch topology has processed at least `count`
+depot records since the module was first launched; throws if not
+reached within the timeout (default 60000 ms).
 
 ```clojure
 (foreign-append! depot "a")
@@ -120,7 +129,10 @@ completes. Accepts an optional `timeout-millis` (throws on timeout).
 ```
 
 The count is the **total** records ever processed by the topology,
-not since the last call.
+not since the last call — track appends with a counter in the client
+wrapper and pass the running total. It is tracked for the MODULE, not
+the module instance: it persists across `update-module!` and module
+restarts, so cumulative counters remain valid after an update.
 
 ### Controlling Microbatch Composition
 
@@ -139,6 +151,18 @@ microbatch (useful for testing batch blocks):
 complete before returning (no-op if already paused). The next
 microbatch contains all records appended while paused (up to 1000 per
 partition). `resume-microbatch-topology!` is a no-op if already active.
+
+## Synchronizing Any Design
+
+`:ack` and `wait-for-microbatch-processed-count` are not the only
+synchronization mechanisms. Any condition observable through a PState
+or query topology is a synchronization point: materialize progress
+state as part of the design (e.g. counters of work enqueued and work
+completed) and poll until the condition holds — processing is done
+when the counters are equal. Every design is synchronizable this way.
+Do NOT reject a design as "untestable" because no built-in waiter
+matches its topology pattern — design the progress state that makes
+completion observable instead.
 
 ## Testing Stream Topologies with Mirror Depots
 
@@ -314,7 +338,7 @@ Modules that check the current time should use `TopologyUtils/currentTimeMillis`
 
 ## Testing Tick Depots
 
-Tick depots fire automatically on a timer, which makes testing non-deterministic. To control when ticks fire in tests, replace the tick depot with a regular global depot that tests can append to manually.
+Tick depots fire automatically on a timer, which makes testing non-deterministic. Tick emissions also count toward `wait-for-microbatch-processed-count`'s processed count, so a live tick depot makes cumulative-count synchronization unreliable — the count advances on its own. For both reasons, replace the tick depot in tests with a regular global depot that tests append to manually, making every processed record test-controlled.
 
 Define a global var somewhere in the project that tests can redef:
 

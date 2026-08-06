@@ -13,15 +13,30 @@ Read `PLAN.md` first, then fill in each item below. Extract the relevant data fr
 - If M differs: must be marked variable with dynamic approach. Is it? <yes/no>
 
 ## PState schemas
+- Group the plan's PStates by (key type, partitioner). For each group of two or more, name them and state why they are not one PState whose value is a fixed-keys-schema with a field per piece of data. Only a difference in key structure or partitioner justifies the split — "different concerns", "different subsystems", "different lifecycles", or "clearer separation" do NOT. <list each group and its justification — if any group of two or more PStates shares a key type and partitioner without such a justification, FAIL: every PState partition carries its own memory overhead on every task>
 - Any Object type? <yes/no — if yes, FAIL>
 - Uniform record-like values (all instances have same fields) use fixed-keys-schema? <yes/no – if no, FAIL>
-- If different instances at the same PState position have different fields, the schema MUST use definterface + defrecord. No exceptions. IPersistentMap, Object, fixed-keys-schema with optional/nil fields, and "justified deviation" are all FAIL. <yes/no – if no, FAIL>
+- If different instances at the same PState position have different fields, the schema MUST use definterface + defrecord. Representing that variation with IPersistentMap, Object, a fixed-keys-schema of optional/nil fields, or a "justified deviation" is a FAIL. (A nullable field on instances that otherwise share the same shape is not this case — that is fine.) <yes/no – if no, FAIL>
 - Inner collections that can exceed 100 elements subindexed? A collection needs subindexing if ANY instance can grow to have more than 100 elements (e.g., a popular entity). For each non-subindexed inner collection, name the specific code or protocol rule that enforces the size limit. If no enforcement mechanism exists, it is not bounded — subindex it. "Bounded by domain dynamics" or "typically small" without an enforcement mechanism does not count. <yes/no - if no, FAIL>
+
+## Partitioning
+For each write, state its partitioner and justify it (see `references/pstate-schema.md` "Partitioning control"). These indicators rule out some bad partitionings, not all:
+- `|hash`: is the keyspace large (many keys per task → negligible hash variance) AND free of any key taking a disproportionate share of events or storage? <if the keyspace is sparse or any key can be hot, FAIL>
+- `|all`: is the data small to hold on every task AND written rarely? <if large or high write throughput, FAIL>
+
+Partitioning efficiency — check the `## Partitioning efficiency` table in `PLAN.md`:
+- Is the table filled in for all three cluster sizes (N = 1, 16, 128)? <if any is missing, FAIL>
+- Does it include every category of input as its own data-category row, including common/typical input, and do the frequency proportions in each table sum to 1? <if all inputs aren't represented or proportions don't sum to 1, FAIL — a single worst-case category is not a workload>
+- Are the weighted sums Σ(proportion × seeks) and Σ(proportion × iterator-reads) computed for each N? <if not, FAIL>
+- Is "seeks/op" the TOTAL across all tasks, not per-task? A read that fans to all N tasks MUST be counted as N seeks — every task it dispatches to counts, including ones whose local slice is empty (an empty/bloom-negative probe is still a dispatched read). <if any row counts per-task, divides by the task count, or drops empty probes — telltale signs: an `|all` read listed as 1 seek, or seeks/op that stays flat or FALLS as N grows — FAIL: it must be recounted as total-across-tasks>
+- Recompute the weighted seeks yourself from the rows as TOTALS across all tasks. Do weighted seeks grow substantially from N = 1 to N = 128? <if yes, FAIL — unconditionally. Cost that grows with cluster size is anti-scalable: adding hardware makes each operation more expensive. No justification is accepted. The verdict is redesign.> Are the justifications drawn only from requirements stated in the spec? A justification based on the anticipated implementation of something outside the spec, or on improving a metric the spec does not state, is invalid — FAIL. Scan every justification for any assumption about the mechanisms of a part of the system this plan does not build — designing or assuming another part's mechanisms is invalid: FAIL.
+- If there is doubt the chosen partitioning is optimal, or cases where it is known not to be: did the plan consider placement schemes that store state to assist partitioning, costed on TOTAL I/O (the placement state's own reads and writes included)? If such a scheme was rejected, was the rejection based on computed total cost? <if rejected on "complexity"/"bookkeeping" without cost arithmetic, FAIL>
 
 ## Topologies
 - Microbatch unless justified? <yes/no>
 - For each write operation that must be visible in single-digit milliseconds: is it handled by a stream topology? Microbatch has at least 300ms latency and cannot meet single-digit millisecond visibility requirements. <list each low-latency write and its topology — if any uses microbatch, FAIL>
 - For each stream topology: list every processing concern it handles. For each concern, does it actually require stream semantics (millisecond-level update latency or ack coordination with the appender)? If any concern does not require stream, FAIL — that concern belongs in a separate microbatch topology. Multiple topologies can consume the same depot independently or topologies can communicate with an internal depot.
+- Was any topology choice made, or any alternative rejected, on test-synchronization or observability grounds? <if yes, FAIL — any design can be synchronized by materializing progress state and polling it; re-evaluate the alternative on the spec's requirements alone>
 
 ## Production readiness
 - Does the plan work correctly with multiple concurrent clients? <yes/no — if no, FAIL>
@@ -51,11 +66,13 @@ Read `PLAN.md` first, then fill in each item below. Extract the relevant data fr
 - For each TaskGlobal or in-memory cache, does the plan use compact, flat data structures (primitive arrays) instead of object-heavy structures (TreeMap, HashMap, vectors of maps)?
 - Object-heavy structures create per-entry heap overhead (object headers, pointers, boxed primitives) and produce large object graphs that increase GC pause times. On a latency-sensitive task thread, GC pauses cause latency spikes that propagate to all operations on that task — including unrelated reads and writes. The effect is non-local: one task's GC pause delays every client whose request routes to that task.
 - For each TaskGlobal: FAIL if the data can be partially or fully stored in a compact, flat data structure.
-- Does any TaskGlobal store data that could be fetched from a PState at query time without violating latency requirements? If so, FAIL.
+- Does any TaskGlobal store data that could be fetched from a PState at query time without violating latency requirements, is not rebuildable from durable state, and is not something the spec tolerates losing? If so, FAIL.
 
 ## Minimality — adversarial simplification
 
 Attack the plan as an over-engineering reviewer: actively search for a SIMPLER plan that keeps every required property — fewer depots, fewer topologies, fewer PStates, fewer mechanisms, less logic.
+
+**Over-engineering is complexity beyond what the *optimal* design requires — not complexity beyond the first design that happens to work.** A mechanism is justified if the most efficient design meeting the spec needs it, even if a cruder, slower, or more wasteful design could omit it. Do NOT strip a mechanism merely because a worse design works without it — efficiency the spec demands is a required property, and a mechanism the optimal design needs to hit it is not over-engineering.
 
 First, sketch in 2–4 sentences the simplest design you can construct that plausibly satisfies the spec. Diff the plan against the sketch: every mechanism in the plan that is absent from the sketch must justify itself below.
 
@@ -69,6 +86,20 @@ Rules:
 - A property the spec does not demand (e.g. exactness beyond stated guarantees) does NOT justify a mechanism.
 - "It is legal/documented" is not a justification — legality is necessary, not sufficient.
 - Indirection is itself a mechanism: if component A could do X directly but instead signals component B to do X, the signaling channel must justify itself.
+- **No dismissal without construction.** You may not reject an alternative — as "over-engineering," "costlier elsewhere," "immaterial," or "the spec mandates this cost" — until you have CONSTRUCTED it concretely and shown the tradeoff with numbers. A rejection requires a built alternative and a side-by-side cost comparison, not an assertion.
+
+## Throughput — adversarial
+
+Attack the plan as a throughput reviewer: actively search for a design that sustains higher throughput — lower aggregate resource usage (seeks/iterations summed across all tasks, weighted by each operation's call rate) — while still meeting every latency requirement.
+
+For each frequent operation, sketch the lowest-aggregate-cost design you can construct that still meets its latency target, then diff it against the plan. If the sketch does less total work per operation while staying within latency, FAIL — adopt the cheaper design.
+
+Look for ways to reduce RocksDB seeks or replace seeks with cheaper iterator reads.
+
+Rules:
+- Parallelizing across more tasks lowers latency, not aggregate cost — spreading the same work wider is not a throughput improvement.
+- Meeting the latency target is necessary, not sufficient: among designs that meet it, the one with the lowest aggregate cost wins.
+- **No dismissal without construction.** You may not reject a lower-cost design because it costs more *elsewhere* (more writes, more storage, more mechanism) until you have CONSTRUCTED it and quantified both sides. "It would add writes / be more complex / the spec mandates this cost" is not a rejection — build the alternative, put the numbers side by side, then decide.
 
 ## Spec coverage — trace every operation and constraint
 

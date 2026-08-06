@@ -129,6 +129,10 @@ Custom partitioners via `defdepotpartitioner`:
   (mod (hash (:region data)) num-partitions))
 ```
 
+Depot partitioners run on the appending client. A throw propagates to the
+caller of `foreign-append!` rather than becoming a rejection the topology can
+observe.
+
 ### Partition key selection
 
 Match the partition key to the **primary PState access pattern**:

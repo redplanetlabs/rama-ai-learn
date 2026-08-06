@@ -4,6 +4,7 @@
          '[babashka.fs :as fs]
          '[babashka.process :as p]
          '[cheshire.core :as json]
+         '[clojure.edn :as edn]
          '[clojure.string :as str]
          '[clojure.java.io :as io]
          '[babashka.tasks :as tasks])
@@ -22,13 +23,13 @@
    :agent      {:desc "Agent to use: claude or codex (default: claude)"
                 :alias :a
                 :default "claude"}
-   :model      {:desc "Model to use (e.g. sonnet, opus, haiku)"
-                :alias :m}
+   :fast-model  {:desc "Fast model: phase 0, easy/medium subproblem phases (required)"}
+   :fast-effort {:desc "Reasoning effort for the fast model (required)"}
+   :slow-model  {:desc "Slow model: planning, plan-validation, decompose, review, hard subproblems (required)"}
+   :slow-effort {:desc "Reasoning effort for the slow model (required)"}
    :verbose    {:desc "Stream agent output to console in real time"
                 :alias :v
                 :coerce :boolean}
-   :reasoning  {:desc "Reasoning effort level (e.g. low, medium, high)"
-                :alias :r}
    :pretty     {:desc "Pretty-print agent output (implies --verbose)"
                 :alias :p
                 :coerce :boolean}
@@ -119,10 +120,17 @@
   (println "  -b, --batch N           Batch number to run (1-5)")
   (println "  -d, --difficulty TYPE   Difficulty filter: standard or hard")
   (println "  -a, --agent NAME        Agent to use: claude or codex (default: claude)")
-  (println "  -m, --model MODEL       Model to use (e.g. sonnet, opus, haiku)")
-  (println "  -r, --reasoning LEVEL   Reasoning effort level (e.g. low, medium, high)")
+  (println "      --fast-model M      Fast model: phase 0, easy/medium subproblem phases (required)")
+  (println "      --fast-effort E     Reasoning effort for the fast model (required)")
+  (println "      --slow-model M      Slow model: planning, validation, decompose, review, hard (required)")
+  (println "      --slow-effort E     Reasoning effort for the slow model (required)")
   (println "  -v, --verbose           Stream agent output to console in real time")
   (println "  -h, --help              Show this help")
+  (println)
+  (println "Planning (phase 1) and plan-validation (phase 2) always run on the slow")
+  (println "model. Phase 2 classifies each subproblem easy|medium|hard: easy runs the")
+  (println "rest in one fast session; medium runs the gated phases on the fast model;")
+  (println "hard runs the gated phases on the slow model.")
   (println)
   (println "Note: Batch 5 (cluster operations) requires a running local Rama cluster.")
   (println "      Set RAMA_CONDUCTOR_HOST/RAMA_CONDUCTOR_UI_PORT to override defaults.")
@@ -163,24 +171,44 @@
   "Tools the agent is allowed to use during challenge runs."
   "Read,Write,Edit,Glob,Grep,Bash,Skill")
 
+(defn phase-id-str
+  "Render a phase id for command lines, sentinels, and filenames.
+  Numbered phases render as their number; keyword stages (:decompose,
+  :full-spec-review) render as their name."
+  [phase-id]
+  (if (keyword? phase-id) (name phase-id) (str phase-id)))
+
+(defn- phase-invocation-args
+  "Arguments passed to /challenge-phase: `<name> <phase-id>` plus the
+  subsystem slug when one is set (multi-subsystem runs only)."
+  [challenge-name phase-id subsystem]
+  (str challenge-name " " (phase-id-str phase-id)
+       (when subsystem (str " " subsystem))))
+
 (defn claude-phase-cmd
   "Build the CLI command to invoke Claude for a single phase of a challenge."
-  [challenge-name phase-id _project-root model reasoning]
-  (cond-> ["claude" "--print" "--output-format" "stream-json" "--verbose"
-           "--allowedTools" allowed-tools
-           "-p" (str "/challenge-phase " challenge-name " " phase-id)]
-    model     (into ["--model" model])
-    reasoning (into ["--effort" reasoning])))
+  ([challenge-name phase-id project-root model reasoning]
+   (claude-phase-cmd challenge-name phase-id project-root model reasoning nil))
+  ([challenge-name phase-id _project-root model reasoning subsystem]
+   (cond-> ["claude" "--print" "--output-format" "stream-json" "--verbose"
+            "--allowedTools" allowed-tools
+            "-p" (str "/challenge-phase "
+                      (phase-invocation-args challenge-name phase-id subsystem))]
+     model     (into ["--model" model])
+     reasoning (into ["--effort" reasoning]))))
 
 (defn codex-phase-cmd
   "Build the CLI command to invoke Codex for a single phase of a challenge.
   Note: requires a $challenge-phase command in the codex skills setup."
-  [challenge-name phase-id project-root model reasoning]
-  (cond-> ["codex" "exec" "--json" "--dangerously-bypass-approvals-and-sandbox"
-           "-C" project-root]
-    model     (into ["--model" model])
-    reasoning (into ["-c" (str "model_reasoning_effort=" reasoning)])
-    true      (conj (str "$challenge-phase " challenge-name " " phase-id))))
+  ([challenge-name phase-id project-root model reasoning]
+   (codex-phase-cmd challenge-name phase-id project-root model reasoning nil))
+  ([challenge-name phase-id project-root model reasoning subsystem]
+   (cond-> ["codex" "exec" "--json" "--dangerously-bypass-approvals-and-sandbox"
+            "-C" project-root]
+     model     (into ["--model" model])
+     reasoning (into ["-c" (str "model_reasoning_effort=" reasoning)])
+     true      (conj (str "$challenge-phase "
+                          (phase-invocation-args challenge-name phase-id subsystem))))))
 
 (def agents
   {:claude {:phase-cmd claude-phase-cmd}
@@ -449,28 +477,45 @@
 
 (defn save-transcript!
   "Save JSONL agent output to ../transcripts relative to project-root.
-  Filename: {date}-{time}-{agent}[-{model}][-{reasoning}]-{challenge}-phase{N}[-attempt{K}].jsonl
+  Filename: {date}-{time}-{agent}[-{model}][-{reasoning}]-{challenge}[-{subsystem}]-phase{ID}[-attempt{K}][-retry{R}].jsonl
+  The {subsystem} segment is present only on multi-subsystem runs (n > 1).
+  {ID} is the phase number for numbered phases, or the stage name for keyword
+  stages (decompose, full-spec-review).
+  {K} counts validation-driven retries (a phase re-run because a later phase
+  failed it); {R} counts transient-server-error re-invocations of the SAME
+  attempt. They are separate segments because they mean different things: {K}
+  is a decision the runner made about the work, {R} is infrastructure noise.
   All transcripts of one challenge run share the same {date}-{time} prefix
   (the run-start-time), so they can be grouped as a unit. Returns the path written."
-  [project-root agent-name model reasoning challenge-name content
-   phase-id attempt run-start-time]
-  (let [t               (or run-start-time (java.time.LocalDateTime/now))
-        date-str        (.format t (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd"))
-        time-str        (.format t (java.time.format.DateTimeFormatter/ofPattern "HHmmss"))
-        transcripts-dir (fs/path project-root ".." "transcripts")
-        base            (cond
-                          (and model reasoning) (format "%s-%s-%s-%s-%s" date-str time-str agent-name model reasoning)
-                          model                 (format "%s-%s-%s-%s" date-str time-str agent-name model)
-                          :else                 (format "%s-%s-%s" date-str time-str agent-name))
-        phase-suffix    (cond
-                          (and phase-id (> attempt 1)) (format "-phase%d-attempt%d" phase-id attempt)
-                          phase-id                     (format "-phase%d" phase-id)
-                          :else                        "")
-        filename        (str base "-" challenge-name phase-suffix ".jsonl")
-        path            (str (fs/path transcripts-dir filename))]
-    (fs/create-dirs transcripts-dir)
-    (spit path content)
-    path))
+  ([project-root agent-name model reasoning challenge-name content
+    phase-id attempt run-start-time]
+   (save-transcript! project-root agent-name model reasoning challenge-name
+                     content phase-id attempt run-start-time nil 0))
+  ([project-root agent-name model reasoning challenge-name content
+    phase-id attempt run-start-time subsystem]
+   (save-transcript! project-root agent-name model reasoning challenge-name
+                     content phase-id attempt run-start-time subsystem 0))
+  ([project-root agent-name model reasoning challenge-name content
+    phase-id attempt run-start-time subsystem retry]
+   (let [t               (or run-start-time (java.time.LocalDateTime/now))
+         date-str        (.format t (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd"))
+         time-str        (.format t (java.time.format.DateTimeFormatter/ofPattern "HHmmss"))
+         transcripts-dir (fs/path project-root ".." "transcripts")
+         base            (cond
+                           (and model reasoning) (format "%s-%s-%s-%s-%s" date-str time-str agent-name model reasoning)
+                           model                 (format "%s-%s-%s-%s" date-str time-str agent-name model)
+                           :else                 (format "%s-%s-%s" date-str time-str agent-name))
+         sub-segment     (if subsystem (str "-" subsystem) "")
+         retry-segment   (if (pos? (or retry 0)) (format "-retry%d" retry) "")
+         phase-suffix    (cond
+                           (and phase-id (> attempt 1)) (format "%s-phase%s-attempt%d%s" sub-segment (phase-id-str phase-id) attempt retry-segment)
+                           phase-id                     (format "%s-phase%s%s" sub-segment (phase-id-str phase-id) retry-segment)
+                           :else                        "")
+         filename        (str base "-" challenge-name phase-suffix ".jsonl")
+         path            (str (fs/path transcripts-dir filename))]
+     (fs/create-dirs transcripts-dir)
+     (spit path content)
+     path)))
 
 ;;; Core runner
 
@@ -483,7 +528,12 @@
 (def ^:dynamic *overall-timeout-s*
   "Hard cap on total wall-clock for one challenge run (seconds).
   Includes all phase invocations, retries, lint, and test runs."
-  (* 6 3600))
+  (* 8 3600))
+
+(def ^:dynamic *phase-retry-cap*
+  "Max times a single phase invocation is re-run after a transient server-side
+  error (overload, 5xx, rate limit) before giving up. Fresh session each time."
+  3)
 
 (defn time-remaining-s
   "Seconds left in the overall challenge run budget. Never negative."
@@ -508,6 +558,24 @@
 (def ^:dynamic *verbose* false)
 
 (def ^:dynamic *pretty* false)
+
+;; Two model tiers: fast and slow. Phase 2 classifies each subproblem
+;; easy|medium|hard; the runner maps that to a tier (easy/medium → fast,
+;; hard → slow) and, for easy, collapses the post-plan phases into one
+;; session. Planning (1), plan-validation (2), decompose, and full-spec-review
+;; always run on the slow tier; phase 0 and the fast subproblem phases run on
+;; the fast tier. -main resolves both tiers from required CLI opts.
+(def ^:dynamic *fast-model* nil)
+(def ^:dynamic *fast-reasoning* nil)
+(def ^:dynamic *slow-model* nil)
+(def ^:dynamic *slow-reasoning* nil)
+
+(defn tier-config
+  "Return [model reasoning] for a tier keyword (:fast | :slow)."
+  [tier]
+  (if (= :slow tier)
+    [*slow-model* *slow-reasoning*]
+    [*fast-model* *fast-reasoning*]))
 
 ;;; Pretty-printing stream-json output
 
@@ -936,27 +1004,36 @@
      :err @err-fut
      :duration-s duration-s}))
 
+(defn- challenge-dir?
+  "A real challenge directory, identified by a README in plain or encrypted
+  form (the README itself is encrypted during full-challenge encryption)."
+  [d]
+  (or (fs/exists? (fs/path d "README.md"))
+      (fs/exists? (fs/path d "README.md.enc"))))
+
 (defn- encrypt-other-challenges!
-  "Encrypt private files for all challenges except the current one."
+  "Fully encrypt every file in all challenges except the current one, so the
+  challenge under test cannot read another challenge's provided code or
+  reference solution (e.g. the social-graph module that fanout provides)."
   [enc-key project-root current-challenge-name]
   (let [challenge-dirs (fs/list-dir (fs/path project-root "challenges"))]
     (doseq [d challenge-dirs
             :let [name (str (fs/file-name d))]
             :when (and (fs/directory? d)
                        (not= name current-challenge-name)
-                       (fs/exists? (fs/path d "README.md")))]
-      (encrypt-challenge! enc-key name))))
+                       (challenge-dir? d))]
+      (encrypt-challenge-fully! enc-key name))))
 
 (defn- decrypt-other-challenges!
-  "Decrypt private files for all challenges except the current one."
+  "Fully decrypt all challenges except the current one."
   [enc-key project-root current-challenge-name]
   (let [challenge-dirs (fs/list-dir (fs/path project-root "challenges"))]
     (doseq [d challenge-dirs
             :let [name (str (fs/file-name d))]
             :when (and (fs/directory? d)
                        (not= name current-challenge-name)
-                       (fs/exists? (fs/path d "README.md")))]
-      (decrypt-challenge! enc-key name))))
+                       (challenge-dir? d))]
+      (decrypt-challenge-fully! enc-key name))))
 
 ;;; Phase orchestration
 
@@ -976,49 +1053,146 @@
 (defn append-reasoning-sentinel!
   "Append a phase sentinel to the challenge's REASONING.md. Each phase
   invocation is instructed to append its reasoning below the sentinel, so
-  entries can be attributed to the phase/attempt that wrote them."
-  [project-root challenge-name phase-id attempt]
-  (let [impl-dir (fs/path project-root "implementations" challenge-name)
-        path     (fs/path impl-dir "REASONING.md")
-        ts       (.format (java.time.LocalDateTime/now)
-                          (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm:ss"))]
-    (fs/create-dirs impl-dir)
-    (spit (str path)
-          (format "\n=== PHASE %d attempt %d — %s ===\n\n" phase-id attempt ts)
-          :append true)))
+  entries can be attributed to the phase/attempt that wrote them. On
+  multi-subsystem runs the sentinel carries the subsystem slug in brackets:
+  `=== PHASE 3 [some-subsystem] attempt 2 — <ts> ===`."
+  ([project-root challenge-name phase-id attempt]
+   (append-reasoning-sentinel! project-root challenge-name phase-id attempt nil))
+  ([project-root challenge-name phase-id attempt subsystem]
+   (append-reasoning-sentinel! project-root challenge-name phase-id attempt subsystem 0))
+  ([project-root challenge-name phase-id attempt subsystem retry]
+   (let [impl-dir (fs/path project-root "implementations" challenge-name)
+         path     (fs/path impl-dir "REASONING.md")
+         ts       (.format (java.time.LocalDateTime/now)
+                           (java.time.format.DateTimeFormatter/ofPattern "yyyy-MM-dd HH:mm:ss"))
+         phase-label (str/upper-case (phase-id-str phase-id))
+         sub-label   (if subsystem (str " [" subsystem "]") "")
+         ;; A transient-error re-invocation is a fresh session doing the SAME
+         ;; attempt over again, so it gets its own sentinel — otherwise the
+         ;; retried session finds the previous session's reasoning sitting under
+         ;; a sentinel that claims to be its own, and burns turns working out
+         ;; whether the phase already ran.
+         retry-label (if (pos? retry) (format " retry %d" retry) "")]
+     (fs/create-dirs impl-dir)
+     (spit (str path)
+           (format "\n=== PHASE %s%s attempt %d%s — %s ===\n\n"
+                   phase-label sub-label attempt retry-label ts)
+           :append true))))
+
+(def ^:private transient-error-re
+  ;; Server-side / infra errors worth retrying. Applied ONLY to stderr and to
+  ;; the error-bearing fields of the agent's structured events (see
+  ;; `agent-error-text`) — never to raw stdout, which carries a `rate_limit_info`
+  ;; block on every single Claude Code run. Numeric status codes require a
+  ;; surrounding HTTP context for the same reason: a bare `500` in agent prose is
+  ;; far more often a timeout argument or a row count than a status code.
+  ;; Deliberately excludes the output-token-maximum error (a config problem,
+  ;; not transient) — that one contains "api error" but retrying it just
+  ;; re-hits the same cap.
+  #"(?i)overloaded|overloaded_error|internal server error|service unavailable|bad gateway|gateway timeout|too many requests|error_during_execution|connection reset|econnreset|socket hang ?up|rate.?limit\w*\s+(?:exceeded|error|reached|hit)|(?:status|code|http|error)\W{0,12}(?:429|50[0234]|529)\b|\b(?:429|50[0234]|529)\s+(?:error|status)")
+
+(defn agent-error-text
+  "The subset of an agent invocation's output worth scanning for transient
+  server errors: stderr in full, plus the error-bearing fields of structured
+  stdout events. Raw stdout is deliberately NOT included — every Claude Code run
+  emits a `rate_limit_info` block and agent prose routinely contains bare
+  numbers like 500, so a regex over the whole stream matches on every run and
+  turns the retry loop into an unconditional 4x re-run of every phase.
+  Non-JSON stdout lines ARE kept: a CLI that dies before it can emit structured
+  output prints plainly."
+  [out err]
+  (let [from-stdout
+        (keep (fn [line]
+                (let [parsed (try (json/parse-string line true)
+                                  (catch Exception _ ::unparsed))]
+                  (cond
+                    (= ::unparsed parsed) line
+                    ;; `is_error` here is top-level (the run's own result event).
+                    ;; Tool-level `is_error` lives nested under :message :content
+                    ;; and is invisible to this check by design — a failed Bash
+                    ;; call is a phase outcome, not an infrastructure failure.
+                    (and (map? parsed)
+                         (or (:is_error parsed)
+                             (and (= "result" (:type parsed))
+                                  (not= "success" (:subtype parsed)))))
+                    (str/join " " (filter string?
+                                          [(:subtype parsed) (:result parsed)
+                                           (:error parsed) (:message parsed)]))
+                    :else nil)))
+              (remove str/blank? (str/split-lines (or out ""))))]
+    (str/join "\n" (cons (or err "") from-stdout))))
+
+(defn transient-server-error?
+  "True when an agent invocation shows a retryable server-side error (overload,
+  5xx, rate limit, dropped connection) rather than a legitimate phase failure.
+  Takes the invocation's stdout and stderr separately so stdout can be narrowed
+  to its error fields before matching."
+  [out err]
+  (boolean (re-find transient-error-re (agent-error-text out err))))
 
 (defn run-phase!
   "Invoke one phase of a challenge. Clamps the per-call timeout to whatever's
-  left in the overall run budget. Returns a result map with everything the
-  caller needs to decide next steps and accumulate per-phase telemetry."
-  [agent-fns challenge-name phase-id attempt
+  left in the overall run budget. A transient server-side error re-runs the
+  invocation (fresh session) up to *phase-retry-cap* times with backoff before
+  the result is returned. `subsystem` is nil on single-subsystem runs;
+  on multi-subsystem runs it is the slug of the subsystem being built and is
+  threaded into the /challenge-phase invocation, the reasoning sentinel, and
+  the transcript filename. Returns a result map with everything the caller
+  needs to decide next steps and accumulate per-phase telemetry."
+  [agent-fns challenge-name phase-id attempt subsystem
    project-root agent-name model reasoning run-start-time run-start-millis]
-  (append-reasoning-sentinel! project-root challenge-name phase-id attempt)
-  (let [cmd ((:phase-cmd agent-fns) challenge-name phase-id project-root model reasoning)
+  (let [cmd ((:phase-cmd agent-fns) challenge-name phase-id project-root model reasoning subsystem)
         remaining (long (time-remaining-s run-start-millis))
         effective-timeout (min *outer-timeout-s* remaining)
+        phase-label (str (phase-id-str phase-id)
+                         (when subsystem (str " [" subsystem "]")))
         _ (when *verbose*
-            (println (format "  Phase %d (attempt %d) starting (budget remaining: %ds, this-call cap: %ds)..."
-                             phase-id attempt remaining effective-timeout)))
-        {:keys [exit out err duration-s timed-out?]}
-        (binding [*outer-timeout-s* effective-timeout]
-          (invoke-command! cmd project-root))
+            (println (format "  Phase %s (attempt %d) starting (budget remaining: %ds, this-call cap: %ds)..."
+                             phase-label attempt remaining effective-timeout)))
+        ;; Re-run the invocation on a transient server-side error, with backoff,
+        ;; until it succeeds, the retry cap is hit, or the budget runs out.
+        ;; Every invocation gets its own sentinel and its own saved transcript:
+        ;; a discarded retry still consumed budget and still wrote to the
+        ;; implementation directory, so throwing its transcript away leaves the
+        ;; run's wall clock unexplainable after the fact.
+        {:keys [exit out err duration-s timed-out? retries transcript-path]}
+        (loop [tries 0]
+          (let [remaining (long (time-remaining-s run-start-millis))
+                eff (min *outer-timeout-s* (max 1 remaining))
+                _ (append-reasoning-sentinel! project-root challenge-name
+                                              phase-id attempt subsystem tries)
+                r (binding [*outer-timeout-s* eff]
+                    (invoke-command! cmd project-root))
+                path (save-transcript! project-root agent-name model reasoning
+                                       challenge-name (:out r) phase-id attempt
+                                       run-start-time subsystem tries)
+                r (assoc r :retries tries :transcript-path path)]
+            (if (and (transient-server-error? (:out r) (:err r))
+                     (not (:timed-out? r))
+                     (< tries *phase-retry-cap*)
+                     (> (time-remaining-s run-start-millis) 0))
+              (let [backoff (min 60 (* 15 (inc tries)))]
+                (when *verbose*
+                  (println (format "  Phase %s: transient server error — retry %d/%d in %ds"
+                                   phase-label (inc tries) *phase-retry-cap* backoff)))
+                (Thread/sleep (* backoff 1000))
+                (recur (inc tries)))
+              r)))
         combined (str out "\n" err)
         verdict (parse-phase-verdict combined)
-        transcript-path (save-transcript! project-root agent-name model reasoning
-                                          challenge-name out phase-id attempt
-                                          run-start-time)
         token-usage (parse-token-usage out)
         cost (compute-cost token-usage (model->pricing model))
         tool-uses (parse-tool-uses out)
         skills-used (parse-skills-used out)
         skill-refs-used (parse-skill-refs-used out)]
     (when *verbose*
-      (println (format "  Phase %d (attempt %d) finished: exit=%d duration=%ds verdict=%s"
-                       phase-id attempt exit duration-s
+      (println (format "  Phase %s (attempt %d) finished: exit=%d duration=%ds retries=%d verdict=%s"
+                       phase-label attempt exit duration-s retries
                        (if verdict (name verdict) "n/a"))))
     {:phase-id phase-id
      :attempt attempt
+     :retries retries
+     :subsystem subsystem
      :exit exit
      :timed-out? (boolean timed-out?)
      :duration-s duration-s
@@ -1046,186 +1220,366 @@
      :skills-used     all-skills
      :skill-refs-used all-skill-refs}))
 
-(defn phase-loop!
-  "Drive the phase loop. Returns a map:
-  {:status :pass | :fail | :timeout
-   :iterations int            ;; number of phase-3 invocations (impl attempts)
-   :phase-results [...]       ;; one per agent invocation
-   :test-output str           ;; final test output (when known)
-   :failure-reason str?       ;; populated on :fail/:timeout
-   :transcript-path str       ;; path to the most recent agent transcript}
+(defn phase3-iterations
+  "Total build invocations (implementation attempts) across a run's phase
+  results, summed across all subsystems. Minimum 1."
+  [results]
+  (max 1 (count (filter #(= :build (:phase-id %)) results))))
 
-  Phase routing:
-  - 0 → 1 → 2
-  - 2 pass → 3, 2 fail → 1   (count toward gate 2's retry cap)
-  - 3 → 4 (unless skip-4 flag set, then 3 → 5)
-  - 4 pass → 5
-  - 4 minor-fail → 3 (set skip-4 to true; next time through, skip phase 4)
-  - 4 major-fail → 3 (don't set skip-4; phase 4 re-runs)
-  - 5 → 6
-  - 6 pass → 7
-  - 6 minor-fail → 7 (phase 7 absorbs the fix during its iterate loop;
-                      no fresh-context re-invocation of phase 5)
-  - 6 major-fail → 5 (full re-write needed; phase 6 re-runs after)
-  - 7 → done (verdict drives :status)
+(defn read-decomposition
+  "Read implementations/<challenge>/DECOMPOSITION.json written by the
+  decompose stage. The required shape is a JSON array of subsystem objects in
+  dependency order, each with a non-empty \"name\" and \"scope\":
+  [{\"name\": \"graph\", \"scope\": \"...\"}, ...]; the runner consumes the
+  \"name\" order (phase agents read the \"scope\" entries; per-subproblem
+  difficulty is decided later by phase 2, not here). Returns a non-empty vector
+  of {:name <trimmed string>} in file order, or nil when the file is missing,
+  unparseable, empty, or malformed — the caller then treats the module as a
+  single subsystem. Never throws."
+  [project-root challenge-name]
+  (let [path (fs/path project-root "implementations" challenge-name "DECOMPOSITION.json")
+        warn! (fn [msg]
+                (binding [*out* *err*]
+                  (println (format "WARN: %s — treating %s as a single subsystem."
+                                   msg challenge-name))))
+        entry->map (fn [entry]
+                     (when (and (map? entry)
+                                (string? (:scope entry))
+                                (seq (str/trim (:scope entry))))
+                       (let [n (:name entry)]
+                         (when (string? n)
+                           (let [trimmed (str/trim n)]
+                             (when (seq trimmed) {:name trimmed}))))))]
+    (if-not (fs/exists? path)
+      (do (warn! (str "DECOMPOSITION.json missing at " path)) nil)
+      ;; cheshire parses top-level JSON arrays lazily — force realization
+      ;; inside the try so malformed JSON is caught here, not downstream.
+      (let [parsed (try (let [p (json/parse-string (slurp (str path)) true)]
+                          (if (seqable? p) (doall p) p))
+                        (catch Exception _ ::unparseable))]
+        (cond
+          (= ::unparseable parsed)
+          (do (warn! "DECOMPOSITION.json is unparseable") nil)
 
-  validation-retry-cap: max consecutive validation FAILs per gate (2, 4, 6).
-  Resets to 0 on PASS at that gate. Both minor-fail and major-fail count.
+          (not (sequential? parsed))
+          (do (warn! "DECOMPOSITION.json is not an array of subsystem entries") nil)
+
+          (empty? parsed)
+          (do (warn! "DECOMPOSITION.json is empty") nil)
+
+          :else
+          (let [entries (mapv entry->map parsed)]
+            (cond
+              (some nil? entries)
+              (do (warn! "DECOMPOSITION.json entries must be objects with non-empty \"name\" and \"scope\" strings") nil)
+
+              (not (apply distinct? (map :name entries)))
+              (do (warn! "DECOMPOSITION.json subsystem names must be distinct") nil)
+
+              :else entries)))))))
+
+(defn run-subsystem-phases!
+  "Drive one subsystem: plan → plan-validate → build. `subsystem` is nil on
+  single-subsystem runs. Returns {:status :pass|:fail|:timeout,
+  :phase-results [...], :failure-reason str?, :transcript-path str}.
+
+  Pipeline:
+  - Phase 1 (plan) and Phase 2 (plan-validation) run on the SLOW tier.
+  - Phase 2 pass|minor-fail → build. major-fail → back to Phase 1 (capped by
+    validation-retry-cap consecutive major-fails).
+  - build (one session: implement → validate → test → iterate to green) runs
+    on the FAST tier and drives the subsystem's status. It subsumes the old
+    separate implement/validate/test/finish phases.
 
   An overall wall-clock budget (*overall-timeout-s*) caps the entire run.
   Checked at every loop iteration; per-call subprocess timeouts are clamped
   to the remaining budget."
-  [agent-fns challenge-name project-root agent-name model reasoning
+  [agent-fns challenge-name subsystem project-root agent-name fast-tier slow-tier
    run-start-time run-start-millis]
-  (loop [phase-id 0
-         attempts {0 1, 1 1, 2 1, 3 1, 4 1, 5 1, 6 1, 7 1}
-         skip-flags {4 false}
-         validation-fail-counts {2 0, 4 0, 6 0}
+  (loop [phase-id 1
+         attempts {1 1, 2 1, :build 1}
+         plan-major-fails 0
          results []]
     (cond
       ;; Overall budget exhausted — abort.
       (<= (time-remaining-s run-start-millis) 0)
       {:status :timeout
-       :iterations (max 1 (dec (get attempts 3 1)))
        :phase-results results
-       :failure-reason (format "Overall challenge time budget (%ds) exceeded before phase %d."
-                               *overall-timeout-s* phase-id)
+       :failure-reason (format "Overall challenge time budget (%ds) exceeded before phase %s."
+                               *overall-timeout-s* (phase-id-str phase-id))
        :transcript-path (:transcript-path (last results))}
-
-      ;; One-shot skip for phase 4 (after a minor-fail on the prior round).
-      (and (= phase-id 4) (get skip-flags 4))
-      (recur 5 attempts (assoc skip-flags 4 false) validation-fail-counts results)
 
       :else
       (let [attempt   (get attempts phase-id 1)
-            r         (run-phase! agent-fns challenge-name phase-id attempt
-                                  project-root agent-name model reasoning
+            [pm pr]   (if (= :build phase-id) fast-tier slow-tier)
+            r         (run-phase! agent-fns challenge-name phase-id attempt subsystem
+                                  project-root agent-name pm pr
                                   run-start-time run-start-millis)
             attempts' (assoc attempts phase-id (inc attempt))
             results'  (conj results r)]
         (cond
           (:timed-out? r)
           {:status :timeout
-           :iterations (max 1 (dec (get attempts' 3 1)))
            :phase-results results'
-           :failure-reason (format "Phase %d (attempt %d) timed out." phase-id attempt)
+           :failure-reason (format "Phase %s (attempt %d) timed out." (phase-id-str phase-id) attempt)
            :transcript-path (:transcript-path r)}
 
           (not= 0 (:exit r))
           {:status :fail
-           :iterations (max 1 (dec (get attempts' 3 1)))
            :phase-results results'
-           :failure-reason (format "Phase %d (attempt %d) exited %d." phase-id attempt (:exit r))
+           :failure-reason (format "Phase %s (attempt %d) exited %d." (phase-id-str phase-id) attempt (:exit r))
            :transcript-path (:transcript-path r)}
 
-          ;; Phase 2: three-way verdict.
-          ;; pass       → phase 3
-          ;; minor-fail → phase 3 (validator fixes plan directly, no re-validation)
-          ;; major-fail → phase 1 (architecture needs rethinking)
+          ;; Phase 1 (plan): no verdict, advance to plan-validation.
+          (= phase-id 1)
+          (recur 2 attempts' plan-major-fails results')
+
+          ;; Phase 2 (plan-validation): pass|minor-fail → build; major-fail →
+          ;; back to Phase 1 (capped).
           (= phase-id 2)
           (cond
             (or (= :pass (:verdict r)) (= :minor-fail (:verdict r)))
-            (recur 3 attempts' skip-flags
-                   (assoc validation-fail-counts 2 0)
-                   results')
+            (recur :build attempts' plan-major-fails results')
 
             (= :major-fail (:verdict r))
-            (let [prior-fails (get validation-fail-counts 2 0)
-                  vfc' (assoc validation-fail-counts 2 (inc prior-fails))]
-              (if (< prior-fails validation-retry-cap)
-                (do (save-attempt! project-root challenge-name)
-                    (recur 1 attempts' skip-flags vfc' results'))
-                {:status :fail
-                 :iterations (max 1 (dec (get attempts' 3 1)))
-                 :phase-results results'
-                 :failure-reason (format "Phase 2 failed validation %d times consecutively."
-                                         (inc prior-fails))
-                 :transcript-path (:transcript-path r)}))
+            (if (< plan-major-fails validation-retry-cap)
+              (do (save-attempt! project-root challenge-name)
+                  (recur 1 attempts' (inc plan-major-fails) results'))
+              {:status :fail
+               :phase-results results'
+               :failure-reason (format "Phase 2 failed validation %d times consecutively."
+                                       (inc plan-major-fails))
+               :transcript-path (:transcript-path r)})
 
             :else
             {:status :fail
-             :iterations (max 1 (dec (get attempts' 3 1)))
              :phase-results results'
              :failure-reason "Phase 2 did not emit PHASE_VALIDATION verdict."
              :transcript-path (:transcript-path r)})
 
-          ;; Phases 4 and 6: three-way verdict (pass/minor-fail/major-fail).
-          ;;
-          ;; Phase 4 routing:
-          ;;   pass       → phase 5
-          ;;   minor-fail → phase 3, skip phase 4 on next round (fix is too small to re-validate)
-          ;;   major-fail → phase 3, re-run phase 4 (architecture changed)
-          ;;
-          ;; Phase 6 routing:
-          ;;   pass       → phase 7
-          ;;   minor-fail → phase 7 (phase 7 absorbs the test fix during its iterate loop;
-          ;;                          no fresh-context re-invocation of phase 5 is paid)
-          ;;   major-fail → phase 5, re-run phase 6 (test suite needs restructuring)
-          (#{4 6} phase-id)
-          (cond
-            (= :pass (:verdict r))
-            (recur (inc phase-id) attempts' skip-flags
-                   (assoc validation-fail-counts phase-id 0)
-                   results')
-
-            (or (= :minor-fail (:verdict r)) (= :major-fail (:verdict r)))
-            (let [prior-fails (get validation-fail-counts phase-id 0)
-                  vfc' (assoc validation-fail-counts phase-id (inc prior-fails))
-                  next-phase (cond
-                               (and (= phase-id 6) (= :minor-fail (:verdict r))) 7
-                               (= phase-id 4) 3
-                               (= phase-id 6) 5)
-                  skip' (if (and (= phase-id 4) (= :minor-fail (:verdict r)))
-                          (assoc skip-flags 4 true)
-                          skip-flags)]
-              (if (< prior-fails validation-retry-cap)
-                (do (save-attempt! project-root challenge-name)
-                    (recur next-phase attempts' skip' vfc' results'))
-                {:status :fail
-                 :iterations (max 1 (dec (get attempts' 3 1)))
-                 :phase-results results'
-                 :failure-reason (format "Phase %d failed validation %d times consecutively."
-                                         phase-id (inc prior-fails))
-                 :transcript-path (:transcript-path r)}))
-
-            :else
-            {:status :fail
-             :iterations (max 1 (dec (get attempts' 3 1)))
-             :phase-results results'
-             :failure-reason (format "Phase %d did not emit a valid PHASE_VALIDATION verdict (got %s)."
-                                     phase-id (:verdict r))
-             :transcript-path (:transcript-path r)})
-
-          ;; Phase 7 (finish): binary verdict; loop ends with this status.
-          ;; The agent is responsible for getting the test suite passing inside
-          ;; its own session — no post-phase verification by the runner.
-          (= phase-id 7)
+          ;; build: implement + validate + test + iterate to green in one
+          ;; session. Binary verdict, terminal.
+          (= phase-id :build)
           (cond
             (= :pass (:verdict r))
             {:status :pass
-             :iterations (max 1 (dec (get attempts' 3 1)))
              :phase-results results'
              :transcript-path (:transcript-path r)}
 
             (= :fail (:verdict r))
             {:status :fail
-             :iterations (max 1 (dec (get attempts' 3 1)))
              :phase-results results'
-             :failure-reason "Phase 7 (finish) emitted FAIL — agent could not get tests passing."
+             :failure-reason "Build emitted FAIL — agent could not get tests passing."
              :transcript-path (:transcript-path r)}
 
             :else
             {:status :fail
-             :iterations (max 1 (dec (get attempts' 3 1)))
              :phase-results results'
-             :failure-reason (format "Phase 7 did not emit a valid PHASE_VALIDATION verdict (got %s)."
+             :failure-reason (format "Build did not emit a valid PHASE_VALIDATION verdict (got %s)."
                                      (:verdict r))
              :transcript-path (:transcript-path r)})
 
-          ;; Non-validation phase: advance.
           :else
-          (recur (inc phase-id) attempts' skip-flags
-                 validation-fail-counts results'))))))
+          {:status :fail
+           :phase-results results'
+           :failure-reason (format "Unexpected phase %s in subsystem loop." (phase-id-str phase-id))
+           :transcript-path (:transcript-path r)})))))
+
+(defn run-full-spec-review!
+  "Run the full-spec-review stage: an adversarial whole-spec review of the
+  ENTIRE module + test suite against the ENTIRE original spec, followed by
+  whatever fixing that review demands. Always runs, even on single-subsystem
+  runs.
+
+  ONE invocation. The session reviews, fixes what it found, re-reviews its own
+  fixes, and repeats until it is clean — the loop lives inside the session, not
+  here. A runner-side review→fix→re-review loop spent a full re-read of the
+  module and test suite on every round (fresh context each time) and was capped
+  at a fixed number of rounds, so it both cost more and gave up while still
+  making progress. The only bound now is the run's time budget.
+
+  Returns {:status :pass|:fail|:timeout, :phase-results [...],
+  :failure-reason str?, :transcript-path str}."
+  [agent-fns challenge-name project-root agent-name model reasoning
+   run-start-time run-start-millis]
+  (if (<= (time-remaining-s run-start-millis) 0)
+    {:status :timeout
+     :phase-results []
+     :failure-reason (format "Overall challenge time budget (%ds) exceeded before full-spec-review."
+                             *overall-timeout-s*)
+     :transcript-path nil}
+    (let [r (run-phase! agent-fns challenge-name :full-spec-review 1 nil
+                        project-root agent-name model reasoning
+                        run-start-time run-start-millis)
+          results [r]]
+      (cond
+        (:timed-out? r)
+        {:status :timeout
+         :phase-results results
+         :failure-reason "Phase full-spec-review timed out."
+         :transcript-path (:transcript-path r)}
+
+        (not= 0 (:exit r))
+        {:status :fail
+         :phase-results results
+         :failure-reason (format "Phase full-spec-review exited %d." (:exit r))
+         :transcript-path (:transcript-path r)}
+
+        (= :pass (:verdict r))
+        {:status :pass
+         :phase-results results
+         :transcript-path (:transcript-path r)}
+
+        (= :fail (:verdict r))
+        {:status :fail
+         :phase-results results
+         :failure-reason "Full-spec review ended with unresolved items."
+         :transcript-path (:transcript-path r)}
+
+        :else
+        {:status :fail
+         :phase-results results
+         :failure-reason (format "Full-spec review did not emit a valid PHASE_VALIDATION verdict (got %s)."
+                                 (:verdict r))
+         :transcript-path (:transcript-path r)}))))
+
+(defn phase-loop!
+  "Drive the full challenge pipeline. Returns a map:
+  {:status :pass | :fail | :timeout
+   :iterations int            ;; total phase-3 invocations across all subsystems
+   :phase-results [...]       ;; one per agent invocation (all stages included)
+   :test-output str           ;; final test output (when known)
+   :failure-reason str?       ;; populated on :fail/:timeout
+   :transcript-path str       ;; path to the most recent agent transcript}
+
+  Pipeline:
+  - Phase 0 (implicit spec)
+  - decompose stage: the agent writes DECOMPOSITION.json; the runner reads it
+    to determine subsystems. Missing/unparseable/empty file → the whole module
+    is one subsystem (warned, never fatal).
+  - phases 1→7 once per subsystem, in DECOMPOSITION.json order, with fresh gate counters and
+    skip flags per subsystem (see run-subsystem-phases!). On multi-subsystem
+    runs (n > 1) every invocation carries the subsystem slug as a third
+    /challenge-phase argument; when n == 1 no slug is passed and the cycle is
+    identical to a run without decomposition. A cap-exceeded gate or phase-7
+    fail in any subsystem fails the whole run, naming the subsystem.
+  - full-spec-review stage (ALWAYS, even when n == 1): see
+    run-full-spec-review!.
+
+  Overall run pass = every subsystem's phase 7 passes AND full-spec-review
+  passes.
+
+  An overall wall-clock budget (*overall-timeout-s*) caps the entire run.
+  Checked before every stage; per-call subprocess timeouts are clamped to the
+  remaining budget."
+  [agent-fns challenge-name project-root agent-name model reasoning
+   run-start-time run-start-millis]
+  ;; Phase 0, decompose and full-spec-review run on the slow tier — the
+  ;; highest-leverage reasoning stages (requirements interpretation, structure,
+  ;; adversarial safety). Phase 0 was previously on the fast tier on the grounds
+  ;; that it is enumeration rather than design; that is wrong. Deciding how much
+  ;; an explicit latitude clause permits is interpretation, and IMPLICIT_SPEC.md
+  ;; binds every later phase while being exempt from their validation checks, so
+  ;; an error there is unrecoverable downstream.
+  ;; Subproblem cycles run planning + validation on the slow tier and the rest
+  ;; on the tier chosen by phase 2's classification (see run-subsystem-phases!).
+  (let [fast-tier (tier-config :fast)
+        slow-tier (tier-config :slow)
+        [frame-model frame-reasoning] slow-tier
+        run-stage! (fn run-stage!
+                     ([phase-id] (run-stage! phase-id :slow))
+                     ([phase-id tier]
+                      (let [[m r] (tier-config tier)]
+                        (run-phase! agent-fns challenge-name phase-id 1 nil
+                                    project-root agent-name m r
+                                    run-start-time run-start-millis))))
+        ;; nil when the stage invocation completed (exit 0, no timeout).
+        stage-failure (fn [r results]
+                        (cond
+                          (:timed-out? r)
+                          {:status :timeout
+                           :iterations (phase3-iterations results)
+                           :phase-results results
+                           :failure-reason (format "Phase %s (attempt %d) timed out."
+                                                   (phase-id-str (:phase-id r)) (:attempt r))
+                           :transcript-path (:transcript-path r)}
+
+                          (not= 0 (:exit r))
+                          {:status :fail
+                           :iterations (phase3-iterations results)
+                           :phase-results results
+                           :failure-reason (format "Phase %s (attempt %d) exited %d."
+                                                   (phase-id-str (:phase-id r)) (:attempt r) (:exit r))
+                           :transcript-path (:transcript-path r)}))
+        budget-exceeded (fn [results stage-label]
+                          (when (<= (time-remaining-s run-start-millis) 0)
+                            {:status :timeout
+                             :iterations (phase3-iterations results)
+                             :phase-results results
+                             :failure-reason (format "Overall challenge time budget (%ds) exceeded before %s."
+                                                     *overall-timeout-s* stage-label)
+                             :transcript-path (:transcript-path (last results))}))]
+    (or
+     ;; Stage: phase 0 (implicit spec).
+     (budget-exceeded [] "phase 0")
+     (let [r0 (run-stage! 0)
+           results [r0]]
+       (or
+        (stage-failure r0 results)
+        ;; Stage: decompose.
+        (budget-exceeded results "stage decompose")
+        (let [rd (run-stage! :decompose)
+              results (conj results rd)]
+          (or
+           (stage-failure rd results)
+           ;; Determine subsystems from DECOMPOSITION.json. A missing/invalid
+           ;; file → a single whole-module cycle (slug nil). Difficulty is NOT
+           ;; decided here — phase 2 classifies each subproblem after planning.
+           (let [subsystems (read-decomposition project-root challenge-name)
+                 multi? (> (count subsystems) 1)
+                 slugs (if multi? (mapv :name subsystems) [nil])]
+             (when (and *verbose* multi?)
+               (println (format "  Decomposition: %d subsystems: %s"
+                                (count slugs) (str/join ", " slugs))))
+             ;; Stage: phases 1→7 (or collapsed build) per subsystem.
+             (loop [remaining slugs
+                    results results]
+               (if (seq remaining)
+                 (let [slug (first remaining)
+                       _ (when (and *verbose* slug)
+                           (println (format "  → subsystem %s" slug)))
+                       sub-result (run-subsystem-phases!
+                                   agent-fns challenge-name slug project-root
+                                   agent-name fast-tier slow-tier
+                                   run-start-time run-start-millis)
+                       results' (into results (:phase-results sub-result))]
+                   (if (= :pass (:status sub-result))
+                     (recur (rest remaining) results')
+                     ;; Any subsystem failure/timeout fails the whole run,
+                     ;; naming the subsystem on multi-subsystem runs.
+                     {:status (:status sub-result)
+                      :iterations (phase3-iterations results')
+                      :phase-results results'
+                      :failure-reason (if slug
+                                        (format "[subsystem %s] %s" slug (:failure-reason sub-result))
+                                        (:failure-reason sub-result))
+                      :transcript-path (or (:transcript-path sub-result)
+                                           (:transcript-path (last results')))}))
+                 ;; Stage: full-spec review (always runs).
+                 (or
+                  (budget-exceeded results "stage full-spec-review")
+                  (let [review-result (run-full-spec-review!
+                                       agent-fns challenge-name project-root
+                                       agent-name frame-model frame-reasoning
+                                       run-start-time run-start-millis)
+                        results' (into results (:phase-results review-result))]
+                    (cond-> {:status (:status review-result)
+                             :iterations (phase3-iterations results')
+                             :phase-results results'
+                             :transcript-path (or (:transcript-path review-result)
+                                                  (:transcript-path (last results')))}
+                      (:failure-reason review-result)
+                      (assoc :failure-reason (:failure-reason review-result)))))))))))))))
 
 (defn run-challenge
   "Run a single challenge through the agent. Returns a result map:
@@ -1705,8 +2059,25 @@
             {:keys [valid missing]} (validate-challenges (vec valid-challenges) project-root)
             agent-key (keyword (:agent opts))
             agent-name (:agent opts)
-            model (:model opts)
-            reasoning (:reasoning opts)]
+            fast-model   (:fast-model opts)
+            fast-effort  (:fast-effort opts)
+            slow-model   (:slow-model opts)
+            slow-effort  (:slow-effort opts)
+            missing-tier (->> [[:fast-model fast-model] [:fast-effort fast-effort]
+                               [:slow-model slow-model] [:slow-effort slow-effort]]
+                              (filter (fn [[_ v]] (str/blank? (str v))))
+                              (mapv first))
+            ;; the slow tier labels the run in headers, reports, and the db
+            model slow-model
+            reasoning slow-effort]
+
+        (when (seq missing-tier)
+          (binding [*out* *err*]
+            (println "Error: these required model flags are missing:")
+            (doseq [k missing-tier]
+              (println (str "  --" (name k))))
+            (println "All four of --fast-model, --fast-effort, --slow-model, --slow-effort are required."))
+          (System/exit 1))
 
         (when (seq missing)
           (binding [*out* *err*]
@@ -1719,11 +2090,18 @@
           (System/exit 0))
 
         (print-run-header agent-name (count valid) opts model reasoning)
+        (println (format "Models: fast=%s [%s] | slow=%s [%s]"
+                         fast-model (resolve-effort fast-effort)
+                         slow-model (resolve-effort slow-effort)))
 
         (let [enc-key       (challenge-encryption-key)
               start-ms      (System/currentTimeMillis)
               results       (binding [*verbose* (or (:verbose opts) (:pretty opts))
-                                      *pretty* (boolean (:pretty opts))]
+                                      *pretty* (boolean (:pretty opts))
+                                      *fast-model* fast-model
+                                      *fast-reasoning* fast-effort
+                                      *slow-model* slow-model
+                                      *slow-reasoning* slow-effort]
                               (run-challenges valid agent-key agent-name project-root model reasoning enc-key))
               total-elapsed-s (/ (- (System/currentTimeMillis) start-ms) 1000.0)]
           (print-summary-table results total-elapsed-s)
@@ -1768,4 +2146,4 @@
 
 (when (= *file* (System/getProperty "babashka.file"))
   (-main *command-line-args*)
-  (shell "bash" "-c" "for i in $(seq 10); do printf '\\a'; sleep 0.3; done"))
+  (tasks/shell "bash" "-c" "for i in $(seq 10); do printf '\\a'; sleep 0.3; done"))

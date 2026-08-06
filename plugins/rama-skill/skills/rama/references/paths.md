@@ -464,13 +464,15 @@ Navigate to subranges of sorted maps. On subindexed PState maps: single disk see
 
 **`(sorted-map-range start end opts)`** — with explicit boundary options `{:inclusive-start? bool :inclusive-end? bool}`.
 
+The `-from` and `-to` variants below each take an optional second argument, `max-amt-or-opts`. It is either a bare entry count or an options map — `(sorted-map-range-to *end 20)` and `(sorted-map-range-to *end {:max-amt 20})` are the same read. Pass the map when you also need `:inclusive?`. The same two forms apply to the sorted-set variants.
+
 **`(sorted-map-range-from start)`** — from start key (inclusive) to end of map.
 
-**`(sorted-map-range-from start opts)`** — with options `{:max-amt n :inclusive? bool}`. `:max-amt` scans **forward** from `start`: returns the first `n` entries at/after `start`, ascending.
+**`(sorted-map-range-from start max-amt-or-opts)`** — `{:max-amt n :inclusive? bool}` or a bare `n`. `:max-amt` scans **forward** from `start`: returns the first `n` entries at/after `start`, ascending.
 
 **`(sorted-map-range-to end)`** — from beginning of map to end key (exclusive).
 
-**`(sorted-map-range-to end opts)`** — with options `{:max-amt n :inclusive? bool}`. `:max-amt` scans **backward** from `end` (exclusive by default; `:inclusive? true` includes it): returns the `n` entries closest to `end` — the *last* `n` entries of the range, not the first `n` of the map. This makes it the tail-read navigator: use it to read the `n` entries nearest a cursor key without iterating the whole range.
+**`(sorted-map-range-to end max-amt-or-opts)`** — `{:max-amt n :inclusive? bool}` or a bare `n`. `:max-amt` scans **backward** from `end` (exclusive by default; `:inclusive? true` includes it): returns the `n` entries closest to `end` — the *last* `n` entries of the range, not the first `n` of the map. This makes it the tail-read navigator: use it to read the `n` entries nearest a cursor key without iterating the whole range.
 
 ```clojure
 (select-one (sorted-map-range-from 2 {:max-amt 2}) (sorted-map 1 :a 2 :b 3 :c 5 :e 7 :g))
@@ -493,11 +495,11 @@ Same semantics as sorted map navigators, applied to sorted sets. On subindexed P
 
 **`(sorted-set-range-from start)`** — from start element (inclusive) onward.
 
-**`(sorted-set-range-from start opts)`** — with options `{:max-amt n :inclusive? bool}`. `:max-amt` scans **forward** from `start` (first `n` elements at/after `start`).
+**`(sorted-set-range-from start max-amt-or-opts)`** — `{:max-amt n :inclusive? bool}` or a bare `n`. `:max-amt` scans **forward** from `start` (first `n` elements at/after `start`).
 
 **`(sorted-set-range-to end)`** — up to end element (exclusive).
 
-**`(sorted-set-range-to end opts)`** — with options `{:max-amt n :inclusive? bool}`. `:max-amt` scans **backward** from `end` (last `n` elements before `end`).
+**`(sorted-set-range-to end max-amt-or-opts)`** — `{:max-amt n :inclusive? bool}` or a bare `n`. `:max-amt` scans **backward** from `end` (last `n` elements before `end`).
 
 **`(sorted-set-range-from-start max-amt)`** — first `max-amt` elements.
 
@@ -611,15 +613,18 @@ Certain terminal operations skip the read on the data structure entirely, which 
 - `keypath` + `NONE>` = **delete only, no read**
 - `set-elem` + `NONE>` = **delete only, no read**
 
-But `keypath` + further navigation **does read** because it must load the value to navigate into it. This means `multi-path` into fields of a `fixed-keys-schema` triggers a read, even though each branch uses `termval`. When writing an entire record, prefer a single `termval` with the whole map over `multi-path` with per-field `termval`s:
+But `keypath` + further navigation **does read** because it must load the value to navigate into it. This means `multi-path` into fields of a `fixed-keys-schema` triggers a read, even though each branch uses `termval`.
+
+Choose on semantics, not cost. `termval` on a map **replaces** it — use it to completely replace what's at that position, needing no read. `multi-path` **updates, adds, or removes** individual keys, leaving the rest intact — use it to update several fields at once, especially with functions of the current value. `termval` is the cheaper write, but using it where you meant to update silently drops every key you didn't mention.
 
 ```clojure
-;; Causes a read — multi-path navigates into the loaded value
+;; Updates two fields, leaves the rest of the record intact. Causes a read —
+;; multi-path navigates into the loaded value.
 (local-transform> [(keypath *k1 *k2)
                    (multi-path [:field1 (termval *v1)] [:field2 (termval *v2)])]
                   $$pstate)
 
-;; No read — keypath + termval directly
+;; Replaces the whole record with a two-field map. No read.
 (local-transform> [(keypath *k1 *k2)
                    (termval {:field1 *v1 :field2 *v2})]
                   $$pstate)

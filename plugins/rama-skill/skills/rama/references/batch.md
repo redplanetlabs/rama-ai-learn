@@ -10,7 +10,7 @@ Every batch block has three sequential phases:
 
 Produces rows of data. The pre-agg builds up by **sequential attachment**: each line attaches to the current branch. Standard dataflow operations, partitioners, `local-select>`, `ops/explode` all attach sequentially. Sequential operations in the same branch are straightforward — multiple `local-select>` calls binding different variables (`*v1`, `*v2`, etc.) just extend the current branch.
 
-Control flow (`<<if`, `<<cond`, `<<switch`) is fine within a branch — it unifies back to one branch after the conditional.
+Control flow (`<<if`, `<<cond`, `<<switch`) is fine within a branch — it unifies back to one branch after the conditional. `loop<-` is fine in batch blocks too.
 
 **Branches and joins:** `gen>` starts a new independent branch. If a line needs a variable not in the current branch's scope, Rama searches for a join across branches that brings that variable in scope. Branches join automatically on shared variable names. All branches must combine into a single branch (through merges via `unify>` or implicit joins) by the end of pre-agg.
 
@@ -215,7 +215,7 @@ materialize     = '(materialize>' { var } ':>' pstate-var ')' ;
 ## Constraints
 
 - Variable shadowing prohibited in pre-agg
-- Final pre-agg partitioner required when aggregators are present
+- Final pre-agg partitioner required when aggregators are present — except with `+group-by`, which needs no explicit partitioner: it auto hash-partitions by the grouping expression
 - No partitioners in post-agg
 - Post-agg scope: only group-by keys + aggregator outputs
 - Stream topologies cannot use `<<batch`

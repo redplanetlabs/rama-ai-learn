@@ -34,7 +34,7 @@ partitioner(v)              ⟹  tree(root-event) += child-event(target-task)
 tree-complete(root-event)   ⟹  record marked processed, :ack returns
 ```
 
-Partition ordering: for any two tasks A, B, if A sends events e₁, e₂, e₃ to B, then B processes them in order e₁ → e₂ → e₃.
+Partition ordering: for any two tasks A, B, if A sends events e₁, e₂, e₃ to B, then B processes them in order e₁ → e₂ → e₃. This is a property of the messaging layer and holds for all topology types, not just stream.
 
 ### When PState writes commit
 
@@ -158,7 +158,6 @@ ack-return      = '(ack-return>' expr ')' ;
 | Source with ID (multi-source) | `(source> *depot {:source-id "myId"} :> *data)` |
 | Ack return aggregation | `(source> *depot {:ack-return-agg (combiner +)} :> *data)` |
 | Ack return | `(ack-return> *v)` |
-| Subsource (type dispatch) | `(<<subsource *data TypeA (...) TypeB (...))` |
 
 ### Source options
 
