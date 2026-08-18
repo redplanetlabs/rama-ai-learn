@@ -19,8 +19,8 @@ records nothing.
 
 ## Workload
 
-- Sentences arrive at roughly **10,000 per second**, averaging 15 words each.
-- Word frequency is skewed: a small number of common words account for a large share of
+- Sentences arrive at roughly **10,000 per second**, averaging 15 words each and never more than 50.
+- Word frequency is heavily skewed: a small number of common words like "the" account for a large share of
   all occurrences.
 - `get-count` runs at **thousands per second** and must complete within 5ms.
 
@@ -28,8 +28,3 @@ records nothing.
 
 Your implementation must satisfy `word-count.protocol/WordCount`. See
 `src/word_count/protocol.clj` for the contract.
-
-Counts must be evenly distributed across the cluster, and both the write path
-and `get-count` must stay efficient as the cluster grows. The skew in word
-frequency means a design that concentrates the common words on one task will
-not hold up.
