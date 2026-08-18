@@ -42,6 +42,8 @@ The first aggregator form marks the transition from pre-agg to agg. Aggregators 
 
 Aggregators always produce output, even when zero rows flow through the pre-agg phase — they emit their init value (e.g., 0 for `+count`, 0 for `+sum`). The output variable is always bound. 
 
+**`|origin` is query-topology only.** It is the required final pre-agg partitioner there, and it is ILLEGAL in a microbatch `<<batch`, where it fails to compile with `|origin may only be used within <<query`. Every `|origin` in this file is a query topology example — do NOT copy one into a `<<batch`.
+
 
 ### Post-agg (result processing)
 
@@ -56,7 +58,7 @@ The fundamental batch block pattern:
 (ops/explode *items :> *item)
 (some-operation *item :> *value)
 ;; Agg: reduce to single result
-(|origin)  ;; or other partitioner
+(|origin)  ;; query topology only — illegal in a microbatch <<batch
 (aggs/+sum *value :> *total)
 ;; Post-agg: use aggregated result
 ```
@@ -179,6 +181,8 @@ The subbatch computes word counts; the outer batch finds the top 2. Subbatches c
 
 For combiner-compatible aggregators (like `+sum`, `+count`, `+min`, `+max`), batch blocks automatically optimize global aggregations: partial aggregates compute locally on each task, then combine after partitioning. This scales much better than centralizing all data before aggregating.
 
+This applies to TOP-LEVEL aggregators only. `+compound` is always accumulator style and never two-phases, even with a combiner in its leaves — see `aggregators.md` §3 for the rewrite.
+
 ## Materialization (microbatch only)
 
 `materialize>` stores batch results in temporary in-memory PStates for reuse within the same microbatch attempt:
@@ -216,6 +220,7 @@ materialize     = '(materialize>' { var } ':>' pstate-var ')' ;
 
 - Variable shadowing prohibited in pre-agg
 - Final pre-agg partitioner required when aggregators are present — except with `+group-by`, which needs no explicit partitioner: it auto hash-partitions by the grouping expression
+- `|origin` as that partitioner is query-topology only; illegal in a microbatch `<<batch`
 - No partitioners in post-agg
 - Post-agg scope: only group-by keys + aggregator outputs
 - Stream topologies cannot use `<<batch`

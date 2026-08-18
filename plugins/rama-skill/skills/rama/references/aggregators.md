@@ -75,6 +75,36 @@ Tuple/List nodes aggregate component-wise.
 Compositionality: each leaf aggregates independently; tree structure
 distributes over aggregation.
 
+**`+compound` NEVER gets two-phase aggregation.** It updates a PState location
+per event, which is accumulator style no matter what its leaves are. A combiner
+used as a `+compound` leaf supplies the merge function but NOT the two-phase
+optimization, so every event still crosses the partitioner on its own. When the
+aggregation key is skewed, a hot key costs one message per occurrence to a
+single task.
+
+To get two-phase, apply a combiner at TOP LEVEL into the PState instead,
+lifting each event into the combiner's state type. Maintaining a key -> max
+over a high-volume stream:
+
+```clojure
+;; NO — accumulator style: one message per event crosses the partitioner
+(|hash *k)
+(+compound $$maxes {*k (aggs/+max *v)})
+
+;; YES — two-phase: each task folds its own events into one partial map first,
+;; so a hot key crosses the partitioner once per task instead of once per event
+(def +merge-maxes
+  (combiner (fn [a b] (merge-with max a b))
+            :init-fn (fn [] {})
+            :flush-required? true))
+
+(|hash *k)
+(+merge-maxes $$maxes {*k *v})
+```
+
+`:flush-required? true` because the combiner's state is a map that grows with
+the number of distinct keys (§7).
+
 ### 4) +group-by
 
 - key : E -> K, result : K -> S_i (one per agg i)
@@ -120,6 +150,9 @@ In `<<batch`, when ALL aggregators are combiners, Rama applies two-phase:
 3. Final aggregation on post-agg task
 
 Critical for global aggregation performance.
+
+Applies to TOP-LEVEL aggregators only. `+compound` is always accumulator style
+and never two-phases, whatever its leaves are — see §3 for the rewrite.
 
 `:flush-required?` — set true on combiners whose state grows unbounded
 (e.g., maps with increasing keys). Controls partial result flushing.
