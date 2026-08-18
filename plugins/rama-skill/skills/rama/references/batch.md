@@ -181,7 +181,7 @@ The subbatch computes word counts; the outer batch finds the top 2. Subbatches c
 
 For combiner-compatible aggregators (like `+sum`, `+count`, `+min`, `+max`), batch blocks automatically optimize global aggregations: partial aggregates compute locally on each task, then combine after partitioning. This scales much better than centralizing all data before aggregating.
 
-This applies to TOP-LEVEL aggregators only. `+compound` is always accumulator style and never two-phases, even with a combiner in its leaves — see `aggregators.md` §3 for the rewrite.
+This applies ONLY to a top-level aggregator producing a single result. Per-key forms are accumulator style and NEVER two-phase, whatever their leaves are — this means both `+compound` and `+group-by`. See `aggregators.md` §3 for the rewrite.
 
 ## Materialization (microbatch only)
 

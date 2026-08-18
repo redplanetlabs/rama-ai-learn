@@ -76,7 +76,8 @@ Compositionality: each leaf aggregates independently; tree structure
 distributes over aggregation.
 
 **`+compound` NEVER gets two-phase aggregation.** It updates a PState location
-per event, which is accumulator style no matter what its leaves are. A combiner
+per event, which is accumulator style no matter what its leaves are. The same
+is true of `+group-by` (§4): every per-key form is accumulator style. A combiner
 used as a `+compound` leaf supplies the merge function but NOT the two-phase
 optimization, so every event still crosses the partitioner on its own. When the
 aggregation key is skewed, a hot key costs one message per occurrence to a
@@ -111,6 +112,10 @@ the number of distinct keys (§7).
 - auto hash-partitions by key, runs each agg per key-group — the final pre-agg partitioner other aggregators require is NOT needed
 - emits one output row per key
 - max 6 grouping vars; batch/query-topology only
+- **NEVER two-phases**, even when every agg in it is a combiner. Like
+  `+compound`, it is a per-key form and is accumulator style, so every event
+  crosses the partitioner on its own. A skewed grouping key gets no relief from
+  it — use a top-level combiner instead (see §3).
 
 ### 5) :new-val>
 
@@ -151,8 +156,11 @@ In `<<batch`, when ALL aggregators are combiners, Rama applies two-phase:
 
 Critical for global aggregation performance.
 
-Applies to TOP-LEVEL aggregators only. `+compound` is always accumulator style
-and never two-phases, whatever its leaves are — see §3 for the rewrite.
+Applies ONLY to a top-level aggregator producing a single result. Any per-key
+form is accumulator style and NEVER two-phases, whatever its leaves are — this
+means both `+compound` (§3) and `+group-by` (§4). To two-phase a skewed key,
+fold the per-key structure into a top-level combiner's state instead: see the
+rewrite in §3.
 
 `:flush-required?` — set true on combiners whose state grows unbounded
 (e.g., maps with increasing keys). Controls partial result flushing.
@@ -169,7 +177,7 @@ batch blocks. Later blocks wait for prior completion.
 
 | Aspect              | Batched (<<batch)                      | Stream (non-batched)          |
 |---------------------|----------------------------------------|-------------------------------|
-| Two-phase           | Yes, when all aggs are combiners       | No (sequential only)          |
+| Two-phase           | Yes, top-level combiners only (§7)     | No (sequential only)          |
 | +top-monotonic      | Final sort applied                     | No final sort (client sorts)  |
 | +limit              | Supported                              | Not supported                 |
 | :new-val>           | Supported                              | Not supported                 |
